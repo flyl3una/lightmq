@@ -16,7 +16,7 @@ extern crate serde;
 extern crate clap;
 
 use std::process::exit;
-use lightmq::load_configure;
+use lightmq::{load_configure, LightMQCore};
 use clap::{Arg, ArgMatches, Parser, Command, Subcommand};
 // use clap::{AppSettings};
 // #[macro_use]
@@ -39,6 +39,15 @@ struct Cli {
     // version: Option<String>,
 }
 
+// async fn run_proxy(param: RunParamProxy) {
+//     let nfc_proxy = ProxyServer::new(param);
+//     match nfc_proxy.run().await {
+//         Err(e) => {
+//             error!("run tunnel error: {}", e)
+//         },
+//         _ => {},
+//     }
+// }
 
 async fn run() {
     let args = Cli::parse();
@@ -57,6 +66,8 @@ async fn run() {
     //     },
     // }
     println!("config: {:?}", config);
+    let core = LightMQCore::new(config);
+    core.run().await;
 }
 
 #[tokio::main]

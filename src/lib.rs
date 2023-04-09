@@ -8,6 +8,7 @@ pub mod err;
 // pub mod protocol;
 // pub mod tunnel;
 pub mod utils;
+pub mod connector;
 // pub mod tls;
 // pub mod dispatch;
 // pub mod proxy;
@@ -25,12 +26,12 @@ extern crate lazy_static;
 extern crate serde;
 #[macro_use]
 extern crate anyhow;
-extern crate crypto;
 
 // use serde::{Serialize, Deserialize};
 use crate::err::MQResult;
 use std::fs;
 use toml::from_str;
+use crate::connector::Connector;
 // use serde_json::from_str;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -59,14 +60,18 @@ pub fn load_configure(config_path: String) -> Configure {
     config
 }
 
+pub struct LightMQCore {
+    pub configure: Configure,
+}
 
-#[cfg(test)]
-mod tests {
-    use super::*;
 
-    #[test]
-    fn it_works() {
-        let result = add(2, 2);
-        assert_eq!(result, 4);
+impl LightMQCore {
+    pub fn new(config: Configure) -> Self {
+        Self { configure: config }
+    }
+
+    pub async fn run(&self) -> MQResult<()> {
+        let connector = Connector::new(self.configure.server.listen.clone());
+        connector.run().await
     }
 }

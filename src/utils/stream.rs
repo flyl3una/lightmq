@@ -4,14 +4,15 @@ use crate::err::MQError;
 use crate::err::MQResult;
 // use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt};
 use tokio::io::{AsyncReadExt, AsyncWriteExt, AsyncRead, AsyncWrite, ReadBuf};
-use tokio::net::TcpStream;
 // use tokio_rustls::server::TlsStream;
-use tokio_rustls::TlsStream;
+// use tokio_rustls::TlsStream;
 use std::pin::Pin;
 use futures::task::Context;
 use tokio::macros::support::Poll;
 use std::io;
 use std::io::Read;
+use tokio::net::{TcpStream};
+
 
 pub type Buff = Vec<u8>;
 pub static NF_BUFF_LEN: usize = 1024 * 8;
@@ -26,7 +27,7 @@ impl StreamUtil {
     /// use tokio::io::{BufReader, BufWriter};
     /// use tokio::net::{TcpStream};
     /// use tokio::net::tcp::{WriteHalf, ReadHalf};
-    /// use tokio::net::tcp::stream::TcpStream;
+    /// use tokio::net::TcpStream;
     /// let mut socket = TcpStream::connect("127.0.0.1:8000").await?;
     /// let (mut reader, mut writer) = socket.split();
     /// let mut socket_reader: BufReader<ReadHalf> = BufReader::new(reader);
@@ -134,9 +135,10 @@ impl StreamUtil {
         }
     }
 
-    pub async fn proxy_io(source_socket: &mut SocketStream,
-                          target_socket: &mut SocketStream,
-    ) -> MQResult<()> {
+    pub async fn proxy_io<T>(source_socket: &mut T,
+                          target_socket: &mut T,
+    ) -> MQResult<()>
+    where T: AsyncReadExt + AsyncWriteExt + Unpin {
         loop{
             tokio::select! {
                 recv_buff_opt = StreamUtil::read_all(source_socket) => {
@@ -149,60 +151,60 @@ impl StreamUtil {
         }
     }
 }
-
-pub enum SocketStream {
-    Socket(TcpStream),
-    TlsSocket(TlsStream<TcpStream>),
-}
-
-impl SocketStream {
-
-    pub fn get_inner(&mut self) -> &mut TcpStream {
-        match self {
-            SocketStream::Socket(x) => x,
-            SocketStream::TlsSocket(x) => x.get_mut().0,
-        }
-    }
-
-
-}
-
-impl AsyncRead for SocketStream {
-    fn poll_read(
-        self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-        buf: &mut ReadBuf<'_>,
-    ) -> Poll<io::Result<()>> {
-        match self.get_mut() {
-            SocketStream::Socket(x) => {Pin::new(x).poll_read(cx, buf)},
-            SocketStream::TlsSocket(x) => {Pin::new(x).poll_read(cx, buf)}
-        }
-    }
-}
-
-impl AsyncWrite for SocketStream {
-    fn poll_write(
-        self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-        buf: &[u8],
-    ) -> Poll<io::Result<usize>> {
-        match self.get_mut() {
-            SocketStream::Socket(x) => {Pin::new(x).poll_write(cx, buf)},
-            SocketStream::TlsSocket(x) => {Pin::new(x).poll_write(cx, buf)}
-        }
-    }
-
-    fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
-        match self.get_mut() {
-            SocketStream::Socket(x) => {Pin::new(x).poll_flush(cx)},
-            SocketStream::TlsSocket(x) => {Pin::new(x).poll_flush(cx)}
-        }
-    }
-
-    fn poll_shutdown(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
-        match self.get_mut() {
-            SocketStream::Socket(x) => {Pin::new(x).poll_shutdown(cx)},
-            SocketStream::TlsSocket(x) => {Pin::new(x).poll_shutdown(cx)}
-        }
-    }
-}
+//
+// pub enum SocketStream {
+//     Socket(TcpStream),
+//     TlsSocket(TlsStream<TcpStream>),
+// }
+//
+// impl SocketStream {
+//
+//     pub fn get_inner(&mut self) -> &mut TcpStream {
+//         match self {
+//             SocketStream::Socket(x) => x,
+//             SocketStream::TlsSocket(x) => x.get_mut().0,
+//         }
+//     }
+//
+//
+// }
+//
+// impl AsyncRead for SocketStream {
+//     fn poll_read(
+//         self: Pin<&mut Self>,
+//         cx: &mut Context<'_>,
+//         buf: &mut ReadBuf<'_>,
+//     ) -> Poll<io::Result<()>> {
+//         match self.get_mut() {
+//             SocketStream::Socket(x) => {Pin::new(x).poll_read(cx, buf)},
+//             SocketStream::TlsSocket(x) => {Pin::new(x).poll_read(cx, buf)}
+//         }
+//     }
+// }
+//
+// impl AsyncWrite for SocketStream {
+//     fn poll_write(
+//         self: Pin<&mut Self>,
+//         cx: &mut Context<'_>,
+//         buf: &[u8],
+//     ) -> Poll<io::Result<usize>> {
+//         match self.get_mut() {
+//             SocketStream::Socket(x) => {Pin::new(x).poll_write(cx, buf)},
+//             SocketStream::TlsSocket(x) => {Pin::new(x).poll_write(cx, buf)}
+//         }
+//     }
+//
+//     fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+//         match self.get_mut() {
+//             SocketStream::Socket(x) => {Pin::new(x).poll_flush(cx)},
+//             SocketStream::TlsSocket(x) => {Pin::new(x).poll_flush(cx)}
+//         }
+//     }
+//
+//     fn poll_shutdown(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+//         match self.get_mut() {
+//             SocketStream::Socket(x) => {Pin::new(x).poll_shutdown(cx)},
+//             SocketStream::TlsSocket(x) => {Pin::new(x).poll_shutdown(cx)}
+//         }
+//     }
+// }
