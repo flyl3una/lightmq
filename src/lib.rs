@@ -9,6 +9,7 @@ pub mod err;
 // pub mod tunnel;
 pub mod utils;
 pub mod connector;
+mod session;
 // pub mod tls;
 // pub mod dispatch;
 // pub mod proxy;
@@ -71,6 +72,9 @@ impl LightMQCore {
     }
 
     pub async fn run(&self) -> MQResult<()> {
+        // 创建一个会话管理 session
+
+        // 监听连接
         let connector = Connector::new(self.configure.server.listen.clone());
         connector.run().await
     }
