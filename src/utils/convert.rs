@@ -1,5 +1,7 @@
-use std::any::Any;
+use std::{any::Any, convert::TryInto};
 use std::error::Error;
+
+use crate::err::{MQError, MQResult};
 // use std::str::pattern::Pattern;
 
 
@@ -39,4 +41,43 @@ impl VecUtil {
         }
         rst
     }
+}
+
+pub struct BuffUtil {}
+impl BuffUtil {
+    pub fn buff_to_f64(buff: Vec<u8>) -> MQResult<f64> {
+        if buff.len() != 8 {
+            return Err(MQError::E(format!("the args len must be float(8)")));
+        }
+        let buf: [u8; 8] = buff[0..8].try_into()
+        .map_err(|e| MQError::ConvertError(format!("the buff try into [u8; 8] failed.\n\terror:{}", e)))?;
+        let f = f64::from_be_bytes(buf);
+        Ok(f)
+    }
+
+    pub fn buff_to_i32(buff: Vec<u8>) -> MQResult<i32> {
+        if buff.len() != 4 {
+            return Err(MQError::E(format!("the args len must be i32(4)")));
+        }
+        let buf: [u8; 4] = buff[0..4].try_into()
+        .map_err(|e| MQError::ConvertError(format!("the buff try into [u8; 4] failed.\n\terror:{}", e)))?;
+        let x = i32::from_be_bytes(buf);
+        Ok(x)
+    }
+
+    pub fn buff_to_str(buff: Vec<u8>) -> MQResult<String> {
+        let s = String::from_utf8(buff)
+        .map_err(|e|MQError::ConvertError(format!("the buff convert str failed.\n\terror: {}", e)))?;
+        Ok(s)
+    }
+
+    pub fn buff_to_bool(buff: Vec<u8>) -> MQResult<bool> {
+        if buff.len() != 1 {
+            return Err(MQError::E(format!("the args len must be bool(1)")));
+        }
+        let b = buff[0] != 0;
+        Ok(b)
+    }
+
+    
 }

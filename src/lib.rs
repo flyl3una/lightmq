@@ -5,7 +5,7 @@
 
 pub mod logger;
 pub mod err;
-// pub mod protocol;
+pub mod protocol;
 // pub mod tunnel;
 pub mod utils;
 pub mod connector;

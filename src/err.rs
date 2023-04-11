@@ -60,7 +60,7 @@ impl MQError {
 
 
 #[repr(i32)]
-pub enum NfcErrorCode {
+pub enum ErrorCode {
     Success = 0,
     Fail = -1,
 }

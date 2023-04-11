@@ -22,7 +22,7 @@ pub enum Value {
     Str(String),
     Int(i32),
     Float(f64),
-    // Bytes()
+    Bytes(Vec<u8>),
 }
 
 // 与connector交互数据的消息
