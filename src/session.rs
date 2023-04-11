@@ -413,7 +413,8 @@ impl SessionManager {
                         // 创建异步任务并将其放入后台队列。
                         // session.create_consumer()
                         tokio::spawn(async {
-                            match session.listen().await {
+                            let mut s = session;
+                            match s.listen().await {
                                 Ok(()) => {},
                                 Err(e) => {error!("session listen failed. {}", e.to_string())},
                             }
