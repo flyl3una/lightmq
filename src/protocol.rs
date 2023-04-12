@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 use std::fmt::Debug;
 use tokio::net::TcpStream;
 
-pub const PROTOCOL_VERSION: u8 = 0;
+pub const PROTOCOL_VERSION: u8 = 1;
 pub const PROTOCOL_REVERSE: u8 = 0;
 
 #[derive(Debug, Clone, Serialize)]
@@ -195,7 +195,10 @@ impl Into<Vec<u8>> for ProtocolHeader {
         let mut buff: Vec<u8> = vec![];
 
         buff.push(self.version);
-        buff.push(self.p_type as u8);
+        buff.push(self.reverse);
+        let type_num = self.p_type as u16;
+        buff.extend_from_slice(&type_num.to_be_bytes());
+        // buff.push(self.p_type as u8);
         buff.extend_from_slice(&self.args_len.to_be_bytes());
         buff.extend_from_slice(&self.body_len.to_be_bytes());
         buff
@@ -327,16 +330,17 @@ impl Protocol {
             proto_args = ProtocolArgs::make(proto_header.p_type.clone(), proto_args_buff)?;
         }
         let body_len = proto_header.body_len.clone() as usize;
-        if proto_header.body_len != 0 {
+        if body_len != 0 {
             let proto_body_buff = StreamUtil::read_exact(reader, body_len).await?;
             proto_body = proto_body_buff;
         }
-        let nf_proto = Protocol {
+        let proto = Protocol {
             header: proto_header,
             args: proto_args,
             body: proto_body,
         };
-        Ok(nf_proto)
+        // debug!("recv protocol: {:?}", &proto);
+        Ok(proto)
     }
 
     //发送数据
@@ -344,19 +348,14 @@ impl Protocol {
     where
         T: AsyncWriteExt + Unpin,
     {
-        debug!("ready send protocol: {:?}", &proto);
+        // debug!("ready send protocol: {:?}", &proto);
         let mut args_buff = vec![];
         let args_buff_len = proto.header.args_len.clone();
         let body_buff_len = proto.header.body_len.clone();
-        // if let Some(args) = proto.args {
-        //     args_buff = args.to_vec();
-        //     args_buff_len = args_buff.len() as u32;
-        //     proto.header.args_len = args_buff_len.clone();
-        // }
         let header_buff: Vec<u8> = proto.header.into();
         let header_args_buff: Vec<u8> = proto.args.into();
         // let args_buff = args.to_vec();
-
+        debug!("send header buffer: {:?}", &header_buff);
         match StreamUtil::write_all(writer, header_buff).await {
             Err(e) => {
                 return Err(MQError::E(format!("writer header failed.")));
@@ -410,4 +409,39 @@ impl Data {
         self.code = code;
         self.msg = msg.to_string();
     }
+}
+
+#[test]
+async fn test_protocol() {
+    let generate_random_string = |length: i32| -> String {
+        use rand::Rng;
+        let mut rng = rand::thread_rng();
+        let charset: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+        let result: String = (0..length)
+            .map(|_| {
+                let index = rng.gen_range(0..charset.len());
+                charset[index] as char
+            })
+            .collect();
+        result
+    };
+
+    let head = ProtocolHeader::new(ProtocolHeaderType::RegisterSubscriber, 3, 2);
+    // let proto = Protocol::new(
+    //     ProtocolHeaderType::Disconnect,
+    //     ProtocolArgs::Null,
+    //     generate_random_string(10).as_bytes().to_vec(),
+    // );
+    println!("head: {:?}", &head);
+    let buff: Vec<u8> = head.clone().into();
+    // let buf: [u8; PROTOCOL_HEAD_LENGTH] = buff[0..PROTOCOL_HEAD_LENGTH];
+    let new_head = ProtocolHeader::try_from(buff).unwrap();
+    println!("new head:{:?}", new_head);
+    assert_eq!(head.version, new_head.version);
+    assert_eq!(head.reverse, new_head.reverse);
+    assert_eq!(head.p_type as u16, new_head.p_type as u16);
+    assert_eq!(head.args_len, new_head.args_len);
+    assert_eq!(head.body_len, new_head.body_len);
+    // assert!(proto.args, new_proto.args);
+    // assert!(proto.body, new_proto.body);
 }

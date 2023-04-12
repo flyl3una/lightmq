@@ -24,7 +24,7 @@ pub async fn handle_connect(
     // let proto_args = ProtoArgs::from_
     let proto_head_type = proto.header.p_type.clone();
     let mut handle = ConnectorHandler::new(server_context, local_context, proto);
-
+    debug!("recv head type: {:?}", &proto_head_type);
     match proto_head_type {
         crate::protocol::ProtocolHeaderType::Null => todo!(),
         crate::protocol::ProtocolHeaderType::Disconnect => todo!(),
@@ -49,10 +49,16 @@ pub async fn handle_connect(
 
 // 消息body类型
 #[derive(Debug, Clone, Serialize, Deserialize)]
-struct ProtocolBodyRegisterPublisher {
+pub struct ProtocolBodyRegisterPublisher {
     pub topic: String,
     pub name: String,
 }
+
+// #[derive(Debug, Clone, Serialize, Deserialize)]
+// pub struct ProtocolBodyRegisterSubscribe {
+//     pub topic: String,
+//     pub name: String,
+// }
 
 // struct SessionClient {
 //     // 向session发送请求
@@ -78,17 +84,32 @@ impl ConnectorHandler {
         }
     }
 
-    // 注册为生产者
+    // 注册为发布者
     async fn publish(&mut self) -> MQResult<()> {
         // 向session_manager 添加topic，确保主题存在
+        // debug!("add topic: {}", self.topic);
         let session_tx = self.request_session_manager_add_topic().await?;
         // 向该主题的session注册为发布者
+        info!("register add topic successful.");
         let endpoint = self.register_publisher(&session_tx).await?;
         // 接收客户端数据，将消息发布到session
+        info!("register publisher successful.");
+        let peer_addr = self
+            .local_context
+            .stream
+            .peer_addr()
+            .map_err(|e| MQError::E("get peer addr failed.".to_string()))?
+            .to_string();
         loop {
             match self.recv_client_publish_message(&endpoint).await {
                 Ok(_) => {}
-                Err(e) => error!("{}", e),
+                Err(e) => {
+                    if let MQError::IoError(w) = &e {
+                        warn!("[{}] io closed. warn: {}", peer_addr, w);
+                        break;
+                    };
+                    error!("{}", e);
+                }
             }
         }
         Ok(())
@@ -98,9 +119,9 @@ impl ConnectorHandler {
     async fn register_publisher(&mut self, tx: &Sender<SessionRequest>) -> MQResult<Endpoint> {
         let (mut tx2, mut rx2) = mpsc::channel::<SessionResponse>(CHANNEL_BUFF_LEN);
         let param = RegisterPublisherRequestParam { tx: tx2 };
-
         let res = ChannelUtil::request::<SessionRequest, SessionResponse>(
-            tx,
+            &tx,
+            &mut rx2,
             SessionRequest::RegisterPublisher(param),
         )
         .await?;
@@ -115,6 +136,7 @@ impl ConnectorHandler {
     // 接收客户端发布的消息
     async fn recv_client_publish_message(&mut self, endpoint: &Endpoint) -> MQResult<()> {
         let protocol = Protocol::read(&mut self.local_context.stream).await?;
+        debug!("recv publish message protocol: {:?}", &protocol);
         let head_type = protocol.header.p_type.clone();
         use crate::protocol::ProtocolHeaderType::*;
         let publish_value = match head_type.clone() {
@@ -149,9 +171,11 @@ impl ConnectorHandler {
                 )));
             }
         };
-        let publish_data = SessionRequest::ConsumeMessage(Message {
+
+        let publish_data = SessionRequest::PublishMessage(Message {
             value: publish_value,
         });
+        debug!("ready publish value: {:?}", publish_data);
         endpoint
             .session_tx
             .send(publish_data)
@@ -184,6 +208,7 @@ impl ConnectorHandler {
         };
         let res = ChannelUtil::request::<SessionManagerRequest, SessionManagerResponse>(
             &self.server_context.tx,
+            &mut rx1,
             SessionManagerRequest::AddTopic(add_topic),
         )
         .await?;
@@ -211,10 +236,27 @@ impl ConnectorHandler {
         // 向该主题的session注册为发布者
         let mut endpoint = self.register_subscriber(&session_tx).await?;
         // 接收客户端数据，将消息发布到session
+        let peer_addr = self
+            .local_context
+            .stream
+            .peer_addr()
+            .map_err(|e| {
+                MQError::E(format!(
+                    "get peer connect failed from local stream.\n\terror: {}",
+                    e
+                ))
+            })?
+            .to_string();
         loop {
             match self.recv_message_to_client(&mut endpoint).await {
                 Ok(_) => {}
-                Err(e) => error!("{}", e),
+                Err(e) => {
+                    if let MQError::IoError(w) = &e {
+                        warn!("[{}] io closed. warn: {}", peer_addr, w);
+                        break;
+                    };
+                    error!("{}", e)
+                }
             }
         }
         Ok(())
@@ -227,6 +269,7 @@ impl ConnectorHandler {
 
         let res = ChannelUtil::request::<SessionRequest, SessionResponse>(
             tx,
+            &mut rx2,
             SessionRequest::RegisterSubscribe(param),
         )
         .await?;
@@ -253,15 +296,16 @@ impl ConnectorHandler {
                             Value::Null => {
                                 return Err(MQError::E(format!("value is Null.")));
                             }
-                            Value::Bool(_) => SendBool,
-                            Value::Str(_) => SendStr,
-                            Value::Int(_) => SendInt,
-                            Value::Float(_) => SendFloat,
-                            Value::Bytes(_) => SendBytes,
+                            Value::Bool(_) => RecvBool,
+                            Value::Str(_) => RecvStr,
+                            Value::Int(_) => RecvInt,
+                            Value::Float(_) => RecvFloat,
+                            Value::Bytes(_) => RecvBytes,
                         };
                         // let proto_head = ProtocolHeader::new(proto_head_type, 0, value_len as u64);
                         let proto =
                             Protocol::new(proto_head_type, ProtocolArgs::Null, msg.value.to_buff());
+                        Protocol::send(&mut self.local_context.stream, proto).await?;
                     }
                     _ => return Err(MQError::E(format!("not supported response."))),
                 }

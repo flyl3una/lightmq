@@ -81,7 +81,6 @@ impl Connector {
         mut server_context: ServerContext,
         mut client_context: LocalContext,
     ) -> MQResult<()> {
-        // let client_tls = self.proxy_param.client_tls.clone();
         tokio::spawn(async move {
             // 接收数据并处理协议
             // 接收协议数据，并根据协议类型进行分发
@@ -101,7 +100,6 @@ impl Connector {
                     )
                 }
             }
-
             info!("end connector.");
         });
         Ok(())

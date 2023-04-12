@@ -20,7 +20,7 @@ pub struct StreamUtil {}
 
 impl StreamUtil {
     //
-    /// ```no_run
+    /// ```notrust
     /// use tokio::io::{BufReader, BufWriter};
     /// use tokio::net::{TcpStream};
     /// use tokio::net::tcp::{WriteHalf, ReadHalf};
@@ -48,7 +48,7 @@ impl StreamUtil {
                 if n == 0 {
                     return Err(MQError::IoError(format!("reader stream break.")));
                 }
-                debug!("recv length: {}", &n);
+                // debug!("recv length: {}", &n);
                 return Ok(buff[..n].to_vec());
             }
             // 连接已断开
@@ -57,7 +57,7 @@ impl StreamUtil {
     }
 
     //
-    /// ```no_run
+    /// ```notrust
     /// use tokio::io::{BufReader, BufWriter};
     /// use tokio::net::{TcpSocket, TcpStream};
     /// let mut socket = TcpStream::connect("127.0.0.1:8000").await?;
@@ -80,7 +80,7 @@ impl StreamUtil {
     }
 
     //
-    /// ```no_run
+    /// ```notrust
     /// use tokio::io::{BufReader, BufWriter};
     /// use tokio::net::{TcpSocket, TcpStream};
     /// let mut socket = TcpStream::connect("127.0.0.1:8000").await?;
@@ -104,7 +104,7 @@ impl StreamUtil {
     //     }
     // }
     //
-    /// ```no_run
+    /// ```notrust
     /// use tokio::io::{BufReader, BufWriter};
     /// use tokio::net::{TcpStream};
     /// use tokio::net::tcp::{WriteHalf, ReadHalf};
@@ -124,7 +124,7 @@ impl StreamUtil {
         match stream.write_all(&buff[..]).await {
             Err(e) => Err(MQError::IoError(e.to_string())),
             _ => {
-                debug!("send buff successful. buff length: {}", buff.len());
+                // debug!("send buff successful. buff length: {}", buff.len());
                 stream.flush().await;
                 Ok(())
             }
@@ -147,60 +147,3 @@ impl StreamUtil {
         }
     }
 }
-//
-// pub enum SocketStream {
-//     Socket(TcpStream),
-//     TlsSocket(TlsStream<TcpStream>),
-// }
-//
-// impl SocketStream {
-//
-//     pub fn get_inner(&mut self) -> &mut TcpStream {
-//         match self {
-//             SocketStream::Socket(x) => x,
-//             SocketStream::TlsSocket(x) => x.get_mut().0,
-//         }
-//     }
-//
-//
-// }
-//
-// impl AsyncRead for SocketStream {
-//     fn poll_read(
-//         self: Pin<&mut Self>,
-//         cx: &mut Context<'_>,
-//         buf: &mut ReadBuf<'_>,
-//     ) -> Poll<io::Result<()>> {
-//         match self.get_mut() {
-//             SocketStream::Socket(x) => {Pin::new(x).poll_read(cx, buf)},
-//             SocketStream::TlsSocket(x) => {Pin::new(x).poll_read(cx, buf)}
-//         }
-//     }
-// }
-//
-// impl AsyncWrite for SocketStream {
-//     fn poll_write(
-//         self: Pin<&mut Self>,
-//         cx: &mut Context<'_>,
-//         buf: &[u8],
-//     ) -> Poll<io::Result<usize>> {
-//         match self.get_mut() {
-//             SocketStream::Socket(x) => {Pin::new(x).poll_write(cx, buf)},
-//             SocketStream::TlsSocket(x) => {Pin::new(x).poll_write(cx, buf)}
-//         }
-//     }
-//
-//     fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
-//         match self.get_mut() {
-//             SocketStream::Socket(x) => {Pin::new(x).poll_flush(cx)},
-//             SocketStream::TlsSocket(x) => {Pin::new(x).poll_flush(cx)}
-//         }
-//     }
-//
-//     fn poll_shutdown(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
-//         match self.get_mut() {
-//             SocketStream::Socket(x) => {Pin::new(x).poll_shutdown(cx)},
-//             SocketStream::TlsSocket(x) => {Pin::new(x).poll_shutdown(cx)}
-//         }
-//     }
-// }

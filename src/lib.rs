@@ -5,9 +5,9 @@
 
 pub mod err;
 pub mod logger;
-mod protocol;
+pub mod protocol;
 // pub mod tunnel;
-mod connect_handle;
+pub mod connect_handle;
 mod connector;
 mod session;
 pub mod utils;

@@ -164,7 +164,7 @@ pub enum SessionRequest {
     // 移除生产者
     RemovePublisher(RemovePublisherRequestParam),
     // 订阅者消费数据
-    ConsumeMessage(Message),
+    // ConsumeMessage(Message),
     // 生产数据
     PublishMessage(Message),
     // 中断
@@ -293,17 +293,15 @@ impl Session {
     // 移除一个消费者
     pub fn remove_subscriber(&mut self, uuid: String) {
         self.subscribers.retain(|x| x.uuid != uuid);
-        // Ok(())
     }
 
     // 移除一个生产者，
     // TODO: 移除时向消费端发送消息
     pub fn remove_publisher(&mut self, uuid: String) {
         self.Publisheres.retain(|x| x.uuid != uuid);
-        // Ok(())
     }
 
-    pub async fn do_request(&mut self, request: SessionRequest) -> MQResult<()> {
+    pub async fn deal_request(&mut self, request: SessionRequest) -> MQResult<()> {
         use SessionRequest::*;
         match request {
             RegisterSubscribe(x) => {
@@ -323,14 +321,17 @@ impl Session {
             }
             RegisterPublisher(x) => {
                 let res = match self.create_publisher() {
-                    Ok(endpoint) => SessionResponse::Subscriber(endpoint),
+                    Ok(endpoint) => SessionResponse::Publisher(endpoint),
                     Err(e) => SessionResponse::Result(ResponseMsg {
                         code: 1,
                         msg: e.to_string(),
                     }),
                 };
                 x.tx.send(res).await.map_err(|e| {
-                    MQError::E(format!("send register Publisher response failed. e: {}", e))
+                    MQError::E(format!(
+                        "send register Publisher response failed.\n\terror: {}",
+                        e
+                    ))
                 })?;
             }
             RemoveSubscribe(x) => {
@@ -341,11 +342,12 @@ impl Session {
                 self.remove_publisher(x.uuid.clone());
                 // x.tx.send(SessionResponse::Result(ResponseMsg{code: 0, msg: e.to_string()})).await?;
             }
-            ConsumeMessage(msg) => {
-                // 消费数据
-            }
-            SessionRequest::PublishMessage(msg) => {
+            // ConsumeMessage(msg) => {
+            //     // 消费数据
+            // }
+            PublishMessage(msg) => {
                 // 生产数据, 向所有在线消费者发送消息
+                debug!("recv publish message:{:?}", &msg);
                 for subscriber in self.subscribers.iter() {
                     subscriber
                         .tx
@@ -365,8 +367,8 @@ impl Session {
 
     pub async fn listen(&mut self) -> MQResult<()> {
         while let Some(request) = self.rx.recv().await {
-            println!("session manager request: {:?}", &request);
-            match self.do_request(request).await {
+            info!("session get request: {:?}", &request);
+            match self.deal_request(request).await {
                 Ok(_) => {}
                 Err(e) => {
                     error!("do manager request failed. {}", e.to_string())
@@ -424,7 +426,7 @@ impl SessionManager {
         // Receive the data
         while let Some(session_manager_request) = self.rx.recv().await {
             println!("session manager request: {:?}", &session_manager_request);
-            match self.do_manager_request(session_manager_request).await {
+            match self.deal_manager_request(session_manager_request).await {
                 Ok(_) => {}
                 Err(e) => {
                     error!("do manager request failed. {}", e.to_string())
@@ -433,11 +435,12 @@ impl SessionManager {
         }
     }
 
-    pub async fn do_manager_request(&mut self, request: SessionManagerRequest) -> MQResult<()> {
+    pub async fn deal_manager_request(&mut self, request: SessionManagerRequest) -> MQResult<()> {
         match request {
             SessionManagerRequest::AddTopic(x) => {
                 // 将该数据返回给请求者
                 let topic = x.topic.clone();
+                debug!("session manager get add topic request: {:?}", &topic);
                 // topic存在则不添加topic，直接返回session
                 let res = match self.session_queue_tx.get(&topic) {
                     Some(tx) => {
@@ -474,6 +477,7 @@ impl SessionManager {
                     }
                 };
 
+                debug!("response add topic result:{:?}", res);
                 x.tx.send(SessionManagerResponse::AddTopicResponse(res))
                     .await
                     .map_err(|e| {
