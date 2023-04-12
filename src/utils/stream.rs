@@ -1,27 +1,24 @@
-use bytes::{BytesMut, BufMut};
-use tokio::time::Duration;
 use crate::err::MQError;
 use crate::err::MQResult;
+use bytes::{BufMut, BytesMut};
+use tokio::time::Duration;
 // use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt};
-use tokio::io::{AsyncReadExt, AsyncWriteExt, AsyncRead, AsyncWrite, ReadBuf};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, ReadBuf};
 // use tokio_rustls::server::TlsStream;
 // use tokio_rustls::TlsStream;
-use std::pin::Pin;
 use futures::task::Context;
-use tokio::macros::support::Poll;
 use std::io;
 use std::io::Read;
-use tokio::net::{TcpStream};
-
+use std::pin::Pin;
+use tokio::macros::support::Poll;
+use tokio::net::TcpStream;
 
 pub type Buff = Vec<u8>;
 pub static NF_BUFF_LEN: usize = 1024 * 8;
 
-
 pub struct StreamUtil {}
 
 impl StreamUtil {
-
     //
     /// ```no_run
     /// use tokio::io::{BufReader, BufWriter};
@@ -48,7 +45,7 @@ impl StreamUtil {
         // read_buf 读取到0时表示结束。
         match stream.read_buf(&mut buff).await {
             Ok(n) => {
-                if n == 0{
+                if n == 0 {
                     return Err(MQError::IoError(format!("reader stream break.")));
                 }
                 debug!("recv length: {}", &n);
@@ -77,9 +74,7 @@ impl StreamUtil {
     {
         let mut buff = vec![0u8; length];
         match stream.read_exact(buff.as_mut_slice()).await {
-            Ok(n) => {
-                Ok(buff.to_vec())
-            },
+            Ok(n) => Ok(buff.to_vec()),
             Err(e) => Err(MQError::IoError(e.to_string())),
         }
     }
@@ -123,9 +118,10 @@ impl StreamUtil {
     /// ```
     // OwnedWriteHalf
     pub async fn write_all<T>(stream: &mut T, buff: Buff) -> MQResult<()>
-    where T: AsyncWriteExt + Unpin {
-        match stream.write_all(&buff[..]).await
-         {
+    where
+        T: AsyncWriteExt + Unpin,
+    {
+        match stream.write_all(&buff[..]).await {
             Err(e) => Err(MQError::IoError(e.to_string())),
             _ => {
                 debug!("send buff successful. buff length: {}", buff.len());
@@ -135,11 +131,11 @@ impl StreamUtil {
         }
     }
 
-    pub async fn proxy_io<T>(source_socket: &mut T,
-                          target_socket: &mut T,
-    ) -> MQResult<()>
-    where T: AsyncReadExt + AsyncWriteExt + Unpin {
-        loop{
+    pub async fn proxy_io<T>(source_socket: &mut T, target_socket: &mut T) -> MQResult<()>
+    where
+        T: AsyncReadExt + AsyncWriteExt + Unpin,
+    {
+        loop {
             tokio::select! {
                 recv_buff_opt = StreamUtil::read_all(source_socket) => {
                     StreamUtil::write_all(target_socket, recv_buff_opt?).await?

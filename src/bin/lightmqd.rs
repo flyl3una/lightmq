@@ -16,7 +16,7 @@ extern crate serde;
 extern crate clap;
 
 use std::process::exit;
-use lightmq::{load_configure, LightMQCore};
+use lightmq::{load_configure, LightMQCore, logger::init_console_log};
 use clap::{Arg, ArgMatches, Parser, Command, Subcommand};
 // use clap::{AppSettings};
 // #[macro_use]
@@ -39,35 +39,18 @@ struct Cli {
     // version: Option<String>,
 }
 
-// async fn run_proxy(param: RunParamProxy) {
-//     let nfc_proxy = ProxyServer::new(param);
-//     match nfc_proxy.run().await {
-//         Err(e) => {
-//             error!("run tunnel error: {}", e)
-//         },
-//         _ => {},
-//     }
-// }
 
 async fn run() {
     let args = Cli::parse();
     println!("config: {}", &args.configure);
 
-    // println!("log level: {}", args.log_level);
+    // 加载配置文件
     let config = load_configure(args.configure.clone());
-    // match  {
-    //     Ok(config) => {
-    //         println!("load config");
-    //         println!("config: {:?}", config);
-    //     },
-    //     Err(e) => {
-    //         println!("{}", e);
-    //         exit(1)
-    //     },
-    // }
+
+    init_console_log(config.log.level.clone());
     println!("config: {:?}", config);
     let core = LightMQCore::new(config);
-    core.run().await;
+    core.run().await.unwrap();
 }
 
 #[tokio::main]

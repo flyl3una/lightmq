@@ -3,13 +3,14 @@
 #![allow(unused_must_use)]
 #![allow(warnings)]
 
-pub mod logger;
 pub mod err;
-pub mod protocol;
+pub mod logger;
+mod protocol;
 // pub mod tunnel;
-pub mod utils;
-pub mod connector;
+mod connect_handle;
+mod connector;
 mod session;
+pub mod utils;
 // pub mod tls;
 // pub mod dispatch;
 // pub mod proxy;
@@ -29,10 +30,11 @@ extern crate serde;
 extern crate anyhow;
 
 // use serde::{Serialize, Deserialize};
+use crate::connector::Connector;
 use crate::err::MQResult;
+use session::SessionManager;
 use std::fs;
 use toml::from_str;
-use crate::connector::Connector;
 // use serde_json::from_str;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -65,7 +67,6 @@ pub struct LightMQCore {
     pub configure: Configure,
 }
 
-
 impl LightMQCore {
     pub fn new(config: Configure) -> Self {
         Self { configure: config }
@@ -74,8 +75,18 @@ impl LightMQCore {
     pub async fn run(&self) -> MQResult<()> {
         // 创建一个会话管理 session
 
+        let session_manager = SessionManager::new();
+        let session_manager_tx = session_manager.tx.clone();
+        tokio::spawn(async move {
+            // 接收数据并处理协议
+            let mut s = session_manager;
+            info!("session manager run...");
+            s.run().await;
+        });
+
         // 监听连接
-        let connector = Connector::new(self.configure.server.listen.clone());
+        let mut connector = Connector::new(self.configure.server.listen.clone());
+        connector.build_context(session_manager_tx);
         connector.run().await
     }
 }

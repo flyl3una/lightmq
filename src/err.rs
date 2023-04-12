@@ -1,7 +1,7 @@
+use std::path::Display;
 use thiserror;
 use thiserror::Error;
-use std::path::Display;
-
+use tokio::sync::mpsc::error::SendError;
 
 #[derive(Debug, thiserror::Error)]
 pub enum MQError {
@@ -10,7 +10,6 @@ pub enum MQError {
 
     // #[error("futures io error: `{0}`")]
     // FuturesIoError(futures::io::Error),
-
     #[error("the key `{0}` is no exists.")]
     KeyError(String),
 
@@ -30,6 +29,8 @@ pub enum MQError {
     #[error("convert error: `{0}`")]
     ConvertError(String),
 
+    #[error("serde json error: `{0}`")]
+    SerdeJsonError(#[from] serde_json::Error),
     // #[error("error code: `{0}`")]
     // ResultCodeError(i32),
 
@@ -40,22 +41,20 @@ pub enum MQError {
 impl MQError {
     pub fn description(&self) -> String {
         use MQError::*;
-        let e = match self {
+        match self {
             // Other(e) => anyhow_error_to_chain(e),
             IoError(e) => e.to_string(),
             KeyError(e) => e.to_string(),
             NoneError(e) => e.to_string(),
+            InvalidParamError(e) => e.to_string(),
+            SerdeJsonError(e) => e.to_string(),
             E(e) => e.to_string(),
             ConvertError(e) => e.to_string(),
             // ResultCodeError(e) => e.to_string(),
-            _ => "".to_string()
-        };
-        e.to_string()
+            _ => "".to_string(),
+        }
     }
 
-    pub fn to_string(&self) -> String {
-        self.description()
-    }
 }
 
 
@@ -65,8 +64,13 @@ pub enum ErrorCode {
     Fail = -1,
 }
 
-pub type MQResult<T> = Result<T, MQError>;
+// impl Into<i32> for ErrorCode {
+//     fn into(self) -> i32 {
+//         self as i32
+//     }
+// }
 
+pub type MQResult<T> = Result<T, MQError>;
 
 // pub fn anyhow_error_to_chain(e: &anyhow::Error) -> String {
 //     let mut err = "".to_string();
