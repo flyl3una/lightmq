@@ -98,7 +98,7 @@ async fn subscribe(topic: String) {
     // 接收发布的数据
 }
 
-async fn publish(topic: String) {
+async fn publish(topic: String, num: usize) {
     // let server_addr = "127.0.0.1:7221";
     let mut stream = TcpStream::connect(SERVER_ADDR).await.unwrap();
 
@@ -116,7 +116,7 @@ async fn publish(topic: String) {
     debug!("send register publisher protocol successful.");
 
     // loop {
-    for i in 0..100 {
+    for i in 0..num {
         let sleep_ms = 100;
         tokio::time::sleep(Duration::from_millis(sleep_ms)).await;
         let publish_proto = if i % 4 == 0 {
@@ -159,7 +159,7 @@ async fn publish(topic: String) {
     }
 }
 
-// 10s
+// 10s, 当publish大于subscribe时，管道阻塞会导致速度变慢
 async fn test_one_publish() {
     let log_level = "error".to_string();
     init_console_log(log_level);
@@ -170,7 +170,7 @@ async fn test_one_publish() {
     tokio::spawn(async {
         subscribe(t).await;
     });
-    publish(topic).await;
+    publish(topic, 100).await;
     let end = Instant::now();
     let duration = end - start;
     let sleep_ms = 1000;
@@ -191,10 +191,32 @@ async fn test_more_publish() {
     for i in 0..10 {
         let t = topic.clone();
         tokio::spawn(async {
-            publish(t).await;
+            publish(t, 100).await;
         });
     }
-    publish(topic).await;
+    publish(topic, 100).await;
+    let end = Instant::now();
+    let duration = end - start;
+    let sleep_ms = 1000;
+    tokio::time::sleep(Duration::from_millis(sleep_ms)).await;
+    println!("publish end, use time: {:?}", duration);
+}
+
+//time：100s
+async fn test_more_subscribe() {
+    let log_level = "error".to_string();
+    init_console_log(log_level);
+
+    let topic = generate_random_string(5);
+    let start = Instant::now();
+    let t = topic.clone();
+    for i in 0..10 {
+        let t = topic.clone();
+        tokio::spawn(async {
+            subscribe(t).await;
+        });
+    }
+    publish(topic, 1000).await;
     let end = Instant::now();
     let duration = end - start;
     let sleep_ms = 1000;
@@ -204,6 +226,7 @@ async fn test_more_publish() {
 
 #[tokio::main]
 async fn main() {
-    test_one_publish().await;
+    // test_one_publish().await;
+    test_more_subscribe().await;
     // test_more_publish().await;
 }
