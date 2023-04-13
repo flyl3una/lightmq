@@ -10,7 +10,7 @@ use crate::{
     protocol::{Protocol, ProtocolArgs, ProtocolHeader, ProtocolHeaderType},
     session::{
         AddTopic, Endpoint, Message, RegisterPublisherRequestParam, RegisterSubscribeRequestParam,
-        SessionManagerRequest, SessionManagerResponse, SessionRequest, SessionResponse, Value,
+        SessionManagerRequest, SessionManagerResponse, SessionRequest, SessionResponse,
         CHANNEL_BUFFER_LENGTH,
     },
     utils::{

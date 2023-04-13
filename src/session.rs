@@ -7,7 +7,7 @@ use tokio::sync::mpsc::{Receiver, Sender};
 use tokio::time::Instant;
 use uuid::Uuid;
 
-pub const CHANNEL_BUFFER_LENGTH: usize = 1024000;
+pub const CHANNEL_BUFFER_LENGTH: usize = 1024*1000;
 
 #[derive(Debug)]
 pub struct SessionManager {
@@ -29,47 +29,6 @@ pub enum ValueType {
     Int = 4,
     Float = 5,
     Bytes = 6,
-}
-
-#[derive(Debug, Clone)]
-pub enum Value {
-    Null,
-    Bool(bool),
-    Str(String),
-    Int(i32),
-    Float(f64),
-    Bytes(Vec<u8>),
-}
-
-impl Value {
-    pub fn len(&self) -> usize {
-        use Value::*;
-        match self {
-            Str(s) => s.len(),
-            Bytes(b) => b.len(),
-            Int(i) => 4,
-            Null => 0,
-            Bool(b) => 1,
-            Float(f) => 8,
-        }
-    }
-    pub fn to_buff(self) -> Vec<u8> {
-        use Value::*;
-        match self {
-            Str(s) => s.as_bytes().to_vec(),
-            Bytes(b) => b,
-            Int(i) => i.to_be_bytes().to_vec(),
-            Null => Vec::new(),
-            Bool(b) => {
-                if b {
-                    [1; 1].to_vec()
-                } else {
-                    [0; 1].to_vec()
-                }
-            }
-            Float(f) => f.to_be_bytes().to_vec(),
-        }
-    }
 }
 
 // 与connector交互数据的消息
