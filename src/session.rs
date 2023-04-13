@@ -1,10 +1,13 @@
 use crate::err::{MQError, MQResult};
+use chrono::{DateTime, TimeZone, Utc};
 use std::collections::HashMap;
+use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::sync::mpsc;
 use tokio::sync::mpsc::{Receiver, Sender};
+use tokio::time::Instant;
 use uuid::Uuid;
 
-pub const CHANNEL_BUFFER_LENGTH: usize = 1024;
+pub const CHANNEL_BUFFER_LENGTH: usize = 1024000;
 
 #[derive(Debug)]
 pub struct SessionManager {
@@ -15,6 +18,17 @@ pub struct SessionManager {
     // 基于topic的消息队列 topic: MessageQueue
     // pub message_queue: HashMap<String, Session>,
     pub session_queue_tx: HashMap<String, Sender<SessionRequest>>,
+}
+
+#[derive(Debug, Clone)]
+#[repr(C)]
+pub enum ValueType {
+    Null = 1,
+    Bool = 2,
+    Str = 3,
+    Int = 4,
+    Float = 5,
+    Bytes = 6,
 }
 
 #[derive(Debug, Clone)]
@@ -63,8 +77,20 @@ impl Value {
 pub struct Message {
     // 消息主题
     // pub topic: String,
+    // 消息发送时间
+    pub create_time: DateTime<Utc>,
+    pub send_time: DateTime<Utc>,
+    // 发送时间
+    pub recv_time: DateTime<Utc>,
+    // 数据类型
+    pub value_type: ValueType,
+    // 数据长度
+    pub value_length: u64,
+    // 数据内容
+    pub value: Vec<u8>,
     // 消息内容
-    pub value: Value,
+    // pub value: Value,
+    // pub value: serde_json::Value,
 }
 
 // 添加topic
@@ -301,7 +327,7 @@ impl Session {
         self.Publisheres.retain(|x| x.uuid != uuid);
     }
 
-    pub async fn deal_request(&mut self, request: SessionRequest) -> MQResult<()> {
+    pub async fn deal_request(&mut self, mut request: SessionRequest) -> MQResult<()> {
         use SessionRequest::*;
         match request {
             RegisterSubscribe(x) => {
@@ -345,9 +371,11 @@ impl Session {
             // ConsumeMessage(msg) => {
             //     // 消费数据
             // }
-            PublishMessage(msg) => {
+            PublishMessage(mut msg) => {
                 // 生产数据, 向所有在线消费者发送消息
                 debug!("recv publish message:{:?}", &msg);
+                let current_time = Utc::now();
+                msg.send_time = Utc::now();
                 for subscriber in self.subscribers.iter() {
                     subscriber
                         .tx
@@ -366,7 +394,7 @@ impl Session {
     }
 
     pub async fn listen(&mut self) -> MQResult<()> {
-        while let Some(request) = self.rx.recv().await {
+        while let Some(mut request) = self.rx.recv().await {
             info!("session get request: {:?}", &request);
             match self.deal_request(request).await {
                 Ok(_) => {}
@@ -518,5 +546,90 @@ impl SessionManager {
             }
         }
         Ok(())
+    }
+}
+
+impl TryFrom<Vec<u8>> for Message {
+    type Error = MQError;
+
+    fn try_from(value: Vec<u8>) -> Result<Self, Self::Error> {
+        let err = "protocol buff must more than 33 byte.".to_string();
+        if value.len() < 33 {
+            return Err(Self::Error::E(err));
+        }
+        // let type_buff: [u8; 4] = buff[1..5].try_into().expect(err.as_str());
+        let create_times_buff: [u8; 8] = value[0..8].try_into().expect(err.as_str());
+        let send_times_buff: [u8; 8] = value[8..16].try_into().expect(err.as_str());
+        let recv_times_buff: [u8; 8] = value[16..24].try_into().expect(err.as_str());
+        let value_len_buff: [u8; 8] = value[25..33].try_into().expect(err.as_str());
+        // let proto_head_type_num = u16::from_be_bytes(value[0..16]);
+        let create_timestamp = i64::from_be_bytes(create_times_buff);
+        let send_timestamp = i64::from_be_bytes(send_times_buff);
+        let recv_timestamp = i64::from_be_bytes(recv_times_buff);
+        let value_len = u64::from_be_bytes(value_len_buff);
+
+        Ok(Self {
+            create_time: Utc.timestamp_nanos(create_timestamp),
+            send_time: Utc.timestamp_nanos(send_timestamp),
+            recv_time: Utc.timestamp_nanos(recv_timestamp),
+            value_length: value_len,
+            value_type: ValueType::try_from(value[24])?,
+            value: value[33..].to_vec(),
+        })
+        // let create_time_buf = value[0..]
+    }
+}
+
+impl Into<Vec<u8>> for Message {
+    fn into(self) -> Vec<u8> {
+        let mut buff: Vec<u8> = vec![];
+        // let create_time_num: u128 = self
+        //     .create_time
+        //     .duration_since(UNIX_EPOCH)
+        //     .unwrap()
+        //     .as_nanos();
+        // let send_time_num: u128 = self
+        //     .send_time
+        //     .duration_since(UNIX_EPOCH)
+        //     .unwrap()
+        //     .as_nanos();
+        // let recv_time_num: u128 = self
+        //     .recv_time
+        //     .duration_since(UNIX_EPOCH)
+        //     .unwrap()
+        //     .as_nanos();
+        let create_time_num = self.create_time.timestamp_nanos();
+        let send_time_num = self.create_time.timestamp_nanos();
+        let recv_time_num = self.create_time.timestamp_nanos();
+        buff.extend_from_slice(&create_time_num.to_be_bytes());
+        buff.extend_from_slice(&send_time_num.to_be_bytes());
+        buff.extend_from_slice(&recv_time_num.to_be_bytes());
+        buff.push(self.value_type as u8);
+        buff.extend_from_slice(&self.value_length.to_be_bytes());
+        buff.extend_from_slice(&self.value);
+        buff
+    }
+}
+
+impl TryFrom<u8> for ValueType {
+    type Error = MQError;
+
+    fn try_from(value: u8) -> Result<Self, Self::Error> {
+        use ValueType::*;
+        if value == Null as u8 {
+            Ok(Null)
+        } else if value == Bool as u8 {
+            Ok(Bool)
+        } else if value == Str as u8 {
+            Ok(Str)
+        } else if value == Int as u8 {
+            Ok(Int)
+        } else if value == Float as u8 {
+            Ok(Float)
+        } else if value == Bytes as u8 {
+            Ok(Bytes)
+        } else {
+            Err(MQError::E(format!("not match value type: {}", value)))
+        }
     }
 }

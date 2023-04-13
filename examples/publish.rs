@@ -9,7 +9,9 @@ extern crate log;
 extern crate tokio;
 #[macro_use]
 extern crate serde;
+use chrono::{DateTime, TimeZone, Utc};
 use lightmq::connect_handle::ProtocolBodyRegisterPublisher;
+use lightmq::session::{Message, ValueType};
 use rand::Rng;
 
 use lightmq::err::{MQError, MQResult};
@@ -17,6 +19,7 @@ use lightmq::logger::init_console_log;
 use lightmq::protocol::{Protocol, ProtocolArgs, ProtocolHeaderType};
 use lightmq::utils::convert::StringUtil;
 use lightmq::utils::stream::{Buff, StreamUtil};
+use serde_json::to_vec;
 use std::net::ToSocketAddrs;
 use std::time::{Duration, Instant};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -50,7 +53,7 @@ fn generate_random_f64() -> f64 {
     num
 }
 
-async fn publish(topic: String) {
+async fn publish(topic: String, publish_num: usize) {
     // let server_addr = "127.0.0.1:7221";
     let mut stream = TcpStream::connect(SERVER_ADDR).await.unwrap();
 
@@ -58,55 +61,61 @@ async fn publish(topic: String) {
         topic: topic.clone(),
         name: "test-name".to_string(),
     };
+    // let current_time = Utc::now();
+    // let message = Message{ create_time: current_time.clone(), send_time: current_time.clone(), recv_time: current_time, value_type: ValueType::Str, value_length: , value: todo!() }
     // 发送订阅请求
+    let register_publish = serde_json::to_vec::<ProtocolBodyRegisterPublisher>(&body).unwrap();
     let publish_proto = Protocol::new(
         ProtocolHeaderType::RegisterPublisher,
         ProtocolArgs::Null,
-        serde_json::to_vec::<ProtocolBodyRegisterPublisher>(&body).unwrap(),
+        register_publish,
     );
     Protocol::send(&mut stream, publish_proto).await.unwrap();
     debug!("send register publisher protocol successful.");
 
     // loop {
-    for i in 0..100 {
+    for i in 0..publish_num {
         let sleep_ms = 100;
-        tokio::time::sleep(Duration::from_millis(sleep_ms)).await;
-        let publish_proto = if i % 4 == 0 {
+        // tokio::time::sleep(Duration::from_millis(sleep_ms)).await;
+        let current = Utc::now();
+        let mut buff: Vec<u8> = vec![];
+        let mut value_type = ValueType::Null;
+        if i % 4 == 0 {
             let v = generate_random_string(10);
-            info!("[topic-{}] publish message: {}", &topic, &v);
-            Protocol::new(
-                ProtocolHeaderType::SendStr,
-                ProtocolArgs::Null,
-                v.as_bytes().to_vec(),
-            )
+            info!("[topic-{}] publish str: {}", &topic, &v);
+            buff = v.as_bytes().to_vec();
+            value_type = ValueType::Str;
         } else if i % 4 == 1 {
             let v = generate_random_i32();
-            info!("[topic-{}] publish int number: {}", &topic, &v);
-            Protocol::new(
-                ProtocolHeaderType::SendInt,
-                ProtocolArgs::Null,
-                v.to_be_bytes().to_vec(),
-            )
+            info!("[topic-{}] publish int: {}", &topic, &v);
+            buff = v.to_be_bytes().to_vec();
+            value_type = ValueType::Int;
         } else if i % 4 == 2 {
             let v = generate_random_f64();
-            info!("[topic-{}] publish int float: {}", &topic, &v);
-            Protocol::new(
-                ProtocolHeaderType::SendFloat,
-                ProtocolArgs::Null,
-                v.to_be_bytes().to_vec(),
-            )
+            info!("[topic-{}] publish float: {}", &topic, &v);
+            buff = v.to_be_bytes().to_vec();
+            value_type = ValueType::Float;
         } else {
             let v = generate_random_string(32);
-            info!("[topic-{}] publish int bytes: {:?}", &topic, &v);
-            Protocol::new(
-                ProtocolHeaderType::SendBytes,
-                ProtocolArgs::Null,
-                v.as_bytes().to_vec(),
-            )
+            info!("[topic-{}] publish bytes: {:?}", &topic, &v);
+            buff = v.as_bytes().to_vec();
+            value_type = ValueType::Bytes;
+        }
+        let message = Message {
+            create_time: current.clone(),
+            send_time: current.clone(),
+            recv_time: current.clone(),
+            value_type,
+            value_length: buff.len() as u64,
+            value: buff,
         };
-
+        let proto = Protocol::new(
+            ProtocolHeaderType::PublishMessage,
+            ProtocolArgs::Null,
+            message.into(),
+        );
         // info!("publish protocol: {:?}", &publish_proto);
-        Protocol::send(&mut stream, publish_proto).await.unwrap();
+        Protocol::send(&mut stream, proto).await.unwrap();
         debug!("send publish message protocol successful.");
     }
 }
@@ -117,7 +126,7 @@ async fn main() {
     init_console_log(log_level);
     let start = Instant::now();
 
-    publish(TOPIC.to_string()).await;
+    publish(TOPIC.to_string(), 10).await;
     let end = Instant::now();
     let duration = end - start;
     println!("publish end, use time: {:?}", duration);

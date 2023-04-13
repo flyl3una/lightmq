@@ -1,4 +1,8 @@
-use tokio::sync::mpsc::{self, Sender};
+use chrono::Utc;
+use tokio::{
+    sync::mpsc::{self, Sender},
+    time::Instant,
+};
 
 use crate::{
     connector::{LocalContext, ServerContext},
@@ -136,51 +140,27 @@ impl ConnectorHandler {
     // 接收客户端发布的消息
     async fn recv_client_publish_message(&mut self, endpoint: &Endpoint) -> MQResult<()> {
         let protocol = Protocol::read(&mut self.local_context.stream).await?;
+        let current_time = Utc::now();
         debug!("recv publish message protocol: {:?}", &protocol);
-        let head_type = protocol.header.p_type.clone();
         use crate::protocol::ProtocolHeaderType::*;
-        let publish_value = match head_type.clone() {
-            Null => Value::Null,
-            Disconnect => {
-                // 断开连接
-                return Err(MQError::E("todo: 断开连接".to_string()));
+        match protocol.header.p_type.clone() {
+            Null => todo!(),
+            Disconnect => todo!(),
+            RegisterPublisher => todo!(),
+            PublishMessage => {
+                let mut message = Message::try_from(protocol.body)?;
+                message.recv_time = current_time;
+                let publish_data = SessionRequest::PublishMessage(message);
+                debug!("ready publish value: {:?}", publish_data);
+                endpoint
+                    .session_tx
+                    .send(publish_data)
+                    .await
+                    .map_err(|e| MQError::E(format!("send failed. error: {}", e)))?;
             }
-            SendStr => {
-                let body = String::from_utf8(protocol.body).map_err(|e| {
-                    MQError::ConvertError(format!("buff convert str failed.\n\terror:{}", e))
-                })?;
-                Value::Str(body)
-            }
-            SendInt => {
-                let num = BuffUtil::buff_to_i32(protocol.body)?;
-                Value::Int(num)
-            }
-            SendFloat => {
-                let num = BuffUtil::buff_to_f64(protocol.body)?;
-                Value::Float(num)
-            }
-            SendBytes => Value::Bytes(protocol.body),
-            SendBool => {
-                let b = BuffUtil::buff_to_bool(protocol.body)?;
-                Value::Bool(b)
-            }
-            _ => {
-                return Err(MQError::E(format!(
-                    "not supported head type: {:?}",
-                    head_type
-                )));
-            }
-        };
-
-        let publish_data = SessionRequest::PublishMessage(Message {
-            value: publish_value,
-        });
-        debug!("ready publish value: {:?}", publish_data);
-        endpoint
-            .session_tx
-            .send(publish_data)
-            .await
-            .map_err(|e| MQError::E(format!("send failed. error: {}", e)))?;
+            RegisterSubscriber => todo!(),
+            SubscribeMessage => todo!(),
+        }
         Ok(())
     }
 
@@ -284,27 +264,19 @@ impl ConnectorHandler {
     // 订阅，接收session发布的消息，并发送给客户端
     async fn recv_message_to_client(&mut self, endpoint: &mut Endpoint) -> MQResult<()> {
         match endpoint.rx.recv().await {
-            Some(res) => {
+            Some(mut res) => {
                 use SessionResponse::*;
                 match res {
                     SessionResponse::BreakSession => todo!(),
-                    SessionResponse::ConsumeMessage(msg) => {
-                        // let v = msg.value;
+                    SessionResponse::ConsumeMessage(mut msg) => {
+                        let current_time = Utc::now();
+                        msg.recv_time = current_time;
                         let value_len = msg.value.len();
-                        use ProtocolHeaderType::*;
-                        let proto_head_type = match &msg.value {
-                            Value::Null => {
-                                return Err(MQError::E(format!("value is Null.")));
-                            }
-                            Value::Bool(_) => RecvBool,
-                            Value::Str(_) => RecvStr,
-                            Value::Int(_) => RecvInt,
-                            Value::Float(_) => RecvFloat,
-                            Value::Bytes(_) => RecvBytes,
-                        };
-                        // let proto_head = ProtocolHeader::new(proto_head_type, 0, value_len as u64);
-                        let proto =
-                            Protocol::new(proto_head_type, ProtocolArgs::Null, msg.value.to_buff());
+                        let proto = Protocol::new(
+                            ProtocolHeaderType::SubscribeMessage,
+                            ProtocolArgs::Null,
+                            msg.into(),
+                        );
                         Protocol::send(&mut self.local_context.stream, proto).await?;
                     }
                     _ => return Err(MQError::E(format!("not supported response."))),

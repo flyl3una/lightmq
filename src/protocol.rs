@@ -49,21 +49,24 @@ pub enum ProtocolHeaderType {
     // 注册为生产者
     RegisterPublisher = 11,
     // 发送数据
-    SendStr = 12,
-    SendInt = 13,
-    SendFloat = 14,
-    SendBytes = 15,
-    SendBool = 16,
+    PublishMessage = 12,
+
+    // SendStr = 12,
+    // SendInt = 13,
+    // SendFloat = 14,
+    // SendBytes = 15,
+    // SendBool = 16,
     // SendStr = 12,
 
     // 注册为消费者
     RegisterSubscriber = 21,
     // 接收数据
-    RecvStr = 22,
-    RecvInt = 23,
-    RecvFloat = 24,
-    RecvBytes = 25,
-    RecvBool = 26,
+    SubscribeMessage = 22,
+    // RecvStr = 22,
+    // RecvInt = 23,
+    // RecvFloat = 24,
+    // RecvBytes = 25,
+    // RecvBool = 26,
 }
 
 pub const PROTOCOL_HEAD_VERSION: u8 = 0x01;
@@ -74,7 +77,7 @@ pub struct RegisterProcuer {
     // pub name: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Copy, Clone, Serialize, Deserialize)]
 pub enum ProtocolArgs {
     // 协议参数,json 格式，根据协议定
     Null,
@@ -142,24 +145,28 @@ impl From<u16> for ProtocolHeaderType {
             Disconnect
         } else if value == RegisterPublisher as u16 {
             RegisterPublisher
-        } else if value == SendStr as u16 {
-            SendStr
-        } else if value == SendInt as u16 {
-            SendInt
-        } else if value == SendFloat as u16 {
-            SendFloat
-        } else if value == SendBytes as u16 {
-            SendBytes
+        // } else if value == SendStr as u16 {
+        //     SendStr
+        // } else if value == SendInt as u16 {
+        //     SendInt
+        // } else if value == SendFloat as u16 {
+        //     SendFloat
+        // } else if value == SendBytes as u16 {
+        //     SendBytes
+        } else if value == PublishMessage as u16 {
+            PublishMessage
         } else if value == RegisterSubscriber as u16 {
             RegisterSubscriber
-        } else if value == RecvStr as u16 {
-            RecvStr
-        } else if value == RecvInt as u16 {
-            RecvInt
-        } else if value == RecvFloat as u16 {
-            RecvFloat
-        } else if value == RecvBytes as u16 {
-            RecvBytes
+        } else if value == SubscribeMessage as u16 {
+            SubscribeMessage
+        // } else if value == RecvStr as u16 {
+        //     RecvStr
+        // } else if value == RecvInt as u16 {
+        //     RecvInt
+        // } else if value == RecvFloat as u16 {
+        //     RecvFloat
+        // } else if value == RecvBytes as u16 {
+        //     RecvBytes
         } else {
             Null
         }
@@ -344,7 +351,7 @@ impl Protocol {
     }
 
     //发送数据
-    pub async fn send<T>(writer: &mut T, mut proto: Protocol) -> MQResult<()>
+    pub async fn send<T>(writer: &mut T, proto: Protocol) -> MQResult<()>
     where
         T: AsyncWriteExt + Unpin,
     {

@@ -14,6 +14,7 @@ use lightmq::connect_handle::ProtocolBodyRegisterPublisher;
 use lightmq::err::{MQError, MQResult};
 use lightmq::logger::init_console_log;
 use lightmq::protocol::{Protocol, ProtocolArgs, ProtocolHeaderType};
+use lightmq::session::{Message, ValueType};
 use lightmq::utils::convert::{BuffUtil, StringUtil};
 use lightmq::utils::stream::{Buff, StreamUtil};
 use std::net::ToSocketAddrs;
@@ -42,32 +43,71 @@ async fn subscribe(topic: String) {
         // debug!("recv publish message: {:?}", protocol);
         let head_type = protocol.header.p_type.clone();
         match head_type {
-            ProtocolHeaderType::RecvStr => {
-                info!(
-                    "[topic-{}] recv string: {}",
-                    &topic,
-                    String::from_utf8_lossy(&protocol.body)
+            ProtocolHeaderType::SubscribeMessage => {
+                let message = Message::try_from(protocol.body.clone()).unwrap();
+                let value = message.value;
+                match message.value_type {
+                    ValueType::Str => {
+                        info!(
+                            "[topic-{}] [create: {}, recv: {}] recv string: {}",
+                            &topic,
+                            message
+                                .create_time
+                                .format("%Y-%m-%d %H:%M:%S.%f")
+                                .to_string(),
+                            message.recv_time.format("%Y-%m-%d %H:%M:%S.%f").to_string(),
+                            String::from_utf8_lossy(&value)
+                        );
+                    }
+                    ValueType::Null => todo!(),
+                    ValueType::Bool => todo!(),
+                    ValueType::Int => {
+                        let buff: [u8; 4] = value[0..4].try_into().unwrap();
+                        info!(
+                            "[topic-{}] [create: {}, recv: {}] recv int: {}",
+                            &topic,
+                            message
+                                .create_time
+                                .format("%Y-%m-%d %H:%M:%S.%f")
+                                .to_string(),
+                            message.recv_time.format("%Y-%m-%d %H:%M:%S.%f").to_string(),
+                            i32::from_be_bytes(buff)
+                        );
+                    }
+                    ValueType::Float => {
+                        let buff: [u8; 8] = value[0..8].try_into().unwrap();
+                        info!(
+                            "[topic-{}] [create: {}, recv: {}] recv float: {}",
+                            &topic,
+                            message
+                                .create_time
+                                .format("%Y-%m-%d %H:%M:%S.%f")
+                                .to_string(),
+                            message.recv_time.format("%Y-%m-%d %H:%M:%S.%f").to_string(),
+                            f64::from_be_bytes(buff)
+                        );
+                    }
+                    ValueType::Bytes => {
+                        info!(
+                            "[topic-{}] [create: {}, recv: {}] recv byte: {:?}",
+                            &topic,
+                            message
+                                .create_time
+                                .format("%Y-%m-%d %H:%M:%S.%f")
+                                .to_string(),
+                            message.recv_time.format("%Y-%m-%d %H:%M:%S.%f").to_string(),
+                            &value
+                        );
+                    }
+                }
+            }
+            _ => {
+                error!(
+                    "recv data. head type not match SubscribeMessage. head type: {:?}",
+                    &head_type
                 );
+                break;
             }
-            ProtocolHeaderType::RecvInt => {
-                info!(
-                    "[topic-{}] recv int: {}",
-                    &topic,
-                    BuffUtil::buff_to_i32(protocol.body).unwrap()
-                );
-            }
-            ProtocolHeaderType::RecvFloat => {
-                info!(
-                    "[topic-{}] recv int: {}",
-                    &topic,
-                    BuffUtil::buff_to_f64(protocol.body).unwrap()
-                );
-            }
-            ProtocolHeaderType::RecvBytes => {
-                info!("[topic-{}] recv bytes: {:?}", &topic, protocol.body);
-            }
-            ProtocolHeaderType::RecvBool => todo!(),
-            _ => todo!(),
         }
     }
     // 接收发布的数据
@@ -75,7 +115,7 @@ async fn subscribe(topic: String) {
 
 #[tokio::main]
 async fn main() {
-    let log_level = "error".to_string();
+    let log_level = "info".to_string();
     init_console_log(log_level);
     subscribe(TOPIC.to_string()).await;
 }

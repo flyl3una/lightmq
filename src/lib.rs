@@ -9,7 +9,7 @@ pub mod protocol;
 // pub mod tunnel;
 pub mod connect_handle;
 mod connector;
-mod session;
+pub mod session;
 pub mod utils;
 // pub mod tls;
 // pub mod dispatch;

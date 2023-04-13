@@ -10,10 +10,12 @@ extern crate tokio;
 #[macro_use]
 extern crate serde;
 
+use chrono::Utc;
 use lightmq::connect_handle::ProtocolBodyRegisterPublisher;
 use lightmq::err::{MQError, MQResult};
 use lightmq::logger::init_console_log;
 use lightmq::protocol::{Protocol, ProtocolArgs, ProtocolHeaderType};
+use lightmq::session::{Message, ValueType};
 use lightmq::utils::convert::{BuffUtil, StringUtil};
 use lightmq::utils::stream::{Buff, StreamUtil};
 use rand::Rng;
@@ -67,38 +69,77 @@ async fn subscribe(topic: String) {
         // debug!("recv publish message: {:?}", protocol);
         let head_type = protocol.header.p_type.clone();
         match head_type {
-            ProtocolHeaderType::RecvStr => {
-                info!(
-                    "[topic-{}] recv string: {}",
-                    &topic,
-                    String::from_utf8_lossy(&protocol.body)
+            ProtocolHeaderType::SubscribeMessage => {
+                let message = Message::try_from(protocol.body.clone()).unwrap();
+                let value = message.value;
+                match message.value_type {
+                    ValueType::Str => {
+                        info!(
+                            "[topic-{}] [create: {}, recv: {}] recv string: {}",
+                            &topic,
+                            message
+                                .create_time
+                                .format("%Y-%m-%d %H:%M:%S.%f")
+                                .to_string(),
+                            message.recv_time.format("%Y-%m-%d %H:%M:%S.%f").to_string(),
+                            String::from_utf8_lossy(&value)
+                        );
+                    }
+                    ValueType::Null => todo!(),
+                    ValueType::Bool => todo!(),
+                    ValueType::Int => {
+                        let buff: [u8; 4] = value[0..4].try_into().unwrap();
+                        info!(
+                            "[topic-{}] [create: {}, recv: {}] recv int: {}",
+                            &topic,
+                            message
+                                .create_time
+                                .format("%Y-%m-%d %H:%M:%S.%f")
+                                .to_string(),
+                            message.recv_time.format("%Y-%m-%d %H:%M:%S.%f").to_string(),
+                            i32::from_be_bytes(buff)
+                        );
+                    }
+                    ValueType::Float => {
+                        let buff: [u8; 8] = value[0..8].try_into().unwrap();
+                        info!(
+                            "[topic-{}] [create: {}, recv: {}] recv float: {}",
+                            &topic,
+                            message
+                                .create_time
+                                .format("%Y-%m-%d %H:%M:%S.%f")
+                                .to_string(),
+                            message.recv_time.format("%Y-%m-%d %H:%M:%S.%f").to_string(),
+                            f64::from_be_bytes(buff)
+                        );
+                    }
+                    ValueType::Bytes => {
+                        info!(
+                            "[topic-{}] [create: {}, recv: {}] recv byte: {:?}",
+                            &topic,
+                            message
+                                .create_time
+                                .format("%Y-%m-%d %H:%M:%S.%f")
+                                .to_string(),
+                            message.recv_time.format("%Y-%m-%d %H:%M:%S.%f").to_string(),
+                            &value
+                        );
+                    }
+                }
+            }
+            _ => {
+                error!(
+                    "recv data. head type not match SubscribeMessage. head type: {:?}",
+                    &head_type
                 );
+                break;
             }
-            ProtocolHeaderType::RecvInt => {
-                info!(
-                    "[topic-{}] recv int: {}",
-                    &topic,
-                    BuffUtil::buff_to_i32(protocol.body).unwrap()
-                );
-            }
-            ProtocolHeaderType::RecvFloat => {
-                info!(
-                    "[topic-{}] recv int: {}",
-                    &topic,
-                    BuffUtil::buff_to_f64(protocol.body).unwrap()
-                );
-            }
-            ProtocolHeaderType::RecvBytes => {
-                info!("[topic-{}] recv int: {:?}", &topic, protocol.body);
-            }
-            ProtocolHeaderType::RecvBool => todo!(),
-            _ => todo!(),
         }
     }
     // 接收发布的数据
 }
 
-async fn publish(topic: String, num: usize) {
+async fn publish(topic: String, publish_num: usize) {
     // let server_addr = "127.0.0.1:7221";
     let mut stream = TcpStream::connect(SERVER_ADDR).await.unwrap();
 
@@ -106,55 +147,61 @@ async fn publish(topic: String, num: usize) {
         topic: topic.clone(),
         name: "test-name".to_string(),
     };
+    // let current_time = Utc::now();
+    // let message = Message{ create_time: current_time.clone(), send_time: current_time.clone(), recv_time: current_time, value_type: ValueType::Str, value_length: , value: todo!() }
     // 发送订阅请求
+    let register_publish = serde_json::to_vec::<ProtocolBodyRegisterPublisher>(&body).unwrap();
     let publish_proto = Protocol::new(
         ProtocolHeaderType::RegisterPublisher,
         ProtocolArgs::Null,
-        serde_json::to_vec::<ProtocolBodyRegisterPublisher>(&body).unwrap(),
+        register_publish,
     );
     Protocol::send(&mut stream, publish_proto).await.unwrap();
     debug!("send register publisher protocol successful.");
 
     // loop {
-    for i in 0..num {
+    for i in 0..publish_num {
         let sleep_ms = 100;
-        tokio::time::sleep(Duration::from_millis(sleep_ms)).await;
-        let publish_proto = if i % 4 == 0 {
+        // tokio::time::sleep(Duration::from_millis(sleep_ms)).await;
+        let current = Utc::now();
+        let mut buff: Vec<u8> = vec![];
+        let mut value_type = ValueType::Null;
+        if i % 4 == 0 {
             let v = generate_random_string(10);
-            info!("[topic-{}] publish message: {}", &topic, &v);
-            Protocol::new(
-                ProtocolHeaderType::SendStr,
-                ProtocolArgs::Null,
-                v.as_bytes().to_vec(),
-            )
+            info!("[topic-{}] publish str: {}", &topic, &v);
+            buff = v.as_bytes().to_vec();
+            value_type = ValueType::Str;
         } else if i % 4 == 1 {
             let v = generate_random_i32();
-            info!("[topic-{}] publish int number: {}", &topic, &v);
-            Protocol::new(
-                ProtocolHeaderType::SendInt,
-                ProtocolArgs::Null,
-                v.to_be_bytes().to_vec(),
-            )
+            info!("[topic-{}] publish int: {}", &topic, &v);
+            buff = v.to_be_bytes().to_vec();
+            value_type = ValueType::Int;
         } else if i % 4 == 2 {
             let v = generate_random_f64();
-            info!("[topic-{}] publish int float: {}", &topic, &v);
-            Protocol::new(
-                ProtocolHeaderType::SendFloat,
-                ProtocolArgs::Null,
-                v.to_be_bytes().to_vec(),
-            )
+            info!("[topic-{}] publish float: {}", &topic, &v);
+            buff = v.to_be_bytes().to_vec();
+            value_type = ValueType::Float;
         } else {
-            let v = generate_random_string(4);
-            info!("[topic-{}] publish int bytes: {:?}", &topic, &v);
-            Protocol::new(
-                ProtocolHeaderType::SendBytes,
-                ProtocolArgs::Null,
-                v.as_bytes().to_vec(),
-            )
+            let v = generate_random_string(32);
+            info!("[topic-{}] publish bytes: {:?}", &topic, &v);
+            buff = v.as_bytes().to_vec();
+            value_type = ValueType::Bytes;
+        }
+        let message = Message {
+            create_time: current.clone(),
+            send_time: current.clone(),
+            recv_time: current.clone(),
+            value_type,
+            value_length: buff.len() as u64,
+            value: buff,
         };
-
+        let proto = Protocol::new(
+            ProtocolHeaderType::PublishMessage,
+            ProtocolArgs::Null,
+            message.into(),
+        );
         // info!("publish protocol: {:?}", &publish_proto);
-        Protocol::send(&mut stream, publish_proto).await.unwrap();
+        Protocol::send(&mut stream, proto).await.unwrap();
         debug!("send publish message protocol successful.");
     }
 }
@@ -188,13 +235,13 @@ async fn test_more_publish() {
     tokio::spawn(async {
         subscribe(t).await;
     });
-    for i in 0..10 {
+    for i in 0..100 {
         let t = topic.clone();
         tokio::spawn(async {
-            publish(t, 100).await;
+            publish(t, 10000).await;
         });
     }
-    publish(topic, 100).await;
+    publish(topic, 10000).await;
     let end = Instant::now();
     let duration = end - start;
     let sleep_ms = 1000;
@@ -227,6 +274,6 @@ async fn test_more_subscribe() {
 #[tokio::main]
 async fn main() {
     // test_one_publish().await;
-    test_more_subscribe().await;
-    // test_more_publish().await;
+    // test_more_subscribe().await;
+    test_more_publish().await;
 }
