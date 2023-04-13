@@ -51,22 +51,10 @@ pub enum ProtocolHeaderType {
     // 发送数据
     PublishMessage = 12,
 
-    // SendStr = 12,
-    // SendInt = 13,
-    // SendFloat = 14,
-    // SendBytes = 15,
-    // SendBool = 16,
-    // SendStr = 12,
-
     // 注册为消费者
     RegisterSubscriber = 21,
     // 接收数据
     SubscribeMessage = 22,
-    // RecvStr = 22,
-    // RecvInt = 23,
-    // RecvFloat = 24,
-    // RecvBytes = 25,
-    // RecvBool = 26,
 }
 
 pub const PROTOCOL_HEAD_VERSION: u8 = 0x01;
@@ -81,40 +69,12 @@ pub struct RegisterProcuer {
 pub enum ProtocolArgs {
     // 协议参数,json 格式，根据协议定
     Null,
-    // Bool(bool),
-    // Str(String),
-    // Int(i32),
-    // Float(f64),
-    // Bytes(Vec<u8>),
-    // 参数
-    // RegisterPublisher,
-    // SendStr(String),
-    // SendInt(i32),
-    // SendFloat(f64),
-
-    // ResigerSubscribe,
-    // RecvStr(String),
-    // RecvInt(i32),
-    // RecvFloat(f64),
-    // TunnelStart(ProtocolTunnelStartArgs),
-    // Data(Data),
 }
 
 impl ProtocolArgs {
     pub fn to_buff(self) -> Vec<u8> {
         match self {
             ProtocolArgs::Null => Vec::new(),
-            // ProtocolArgs::Bool(b) => {
-            //     if b {
-            //         [1;1].to_vec()
-            //     } else {
-            //         [0;1].to_vec()
-            //     }
-            // },
-            // ProtocolArgs::Str(ref s) => s.as_bytes().to_vec(),
-            // ProtocolArgs::Int(i) => i.to_be_bytes().to_vec(),
-            // ProtocolArgs::Float(f) => f.to_be_bytes().to_vec(),
-            // ProtocolArgs::Bytes(b) => b,
         }
     }
 }
@@ -145,28 +105,12 @@ impl From<u16> for ProtocolHeaderType {
             Disconnect
         } else if value == RegisterPublisher as u16 {
             RegisterPublisher
-        // } else if value == SendStr as u16 {
-        //     SendStr
-        // } else if value == SendInt as u16 {
-        //     SendInt
-        // } else if value == SendFloat as u16 {
-        //     SendFloat
-        // } else if value == SendBytes as u16 {
-        //     SendBytes
         } else if value == PublishMessage as u16 {
             PublishMessage
         } else if value == RegisterSubscriber as u16 {
             RegisterSubscriber
         } else if value == SubscribeMessage as u16 {
             SubscribeMessage
-        // } else if value == RecvStr as u16 {
-        //     RecvStr
-        // } else if value == RecvInt as u16 {
-        //     RecvInt
-        // } else if value == RecvFloat as u16 {
-        //     RecvFloat
-        // } else if value == RecvBytes as u16 {
-        //     RecvBytes
         } else {
             Null
         }
@@ -183,10 +127,10 @@ impl From<[u8; PROTOCOL_HEAD_LENGTH]> for ProtocolHeader {
         let proto_head_type: [u8; 2] = buff[2..4].try_into().expect(err.as_str());
         let arg_len_buff: [u8; 4] = buff[4..8].try_into().expect(err.as_str());
         let body_len_buff: [u8; 8] = buff[8..16].try_into().expect(err.as_str());
-        // let p_type_num = u32::from_be_bytes(type_buff);
-        let proto_head_type_num = u16::from_be_bytes(proto_head_type);
-        let args_len = u32::from_be_bytes(arg_len_buff);
-        let body_len = u64::from_be_bytes(body_len_buff);
+        // let p_type_num = u32::from_ne_bytes(type_buff);
+        let proto_head_type_num = u16::from_ne_bytes(proto_head_type);
+        let args_len = u32::from_ne_bytes(arg_len_buff);
+        let body_len = u64::from_ne_bytes(body_len_buff);
         Self {
             version: buff[0],
             reverse: buff[1],
@@ -204,10 +148,10 @@ impl Into<Vec<u8>> for ProtocolHeader {
         buff.push(self.version);
         buff.push(self.reverse);
         let type_num = self.p_type as u16;
-        buff.extend_from_slice(&type_num.to_be_bytes());
+        buff.extend_from_slice(&type_num.to_ne_bytes());
         // buff.push(self.p_type as u8);
-        buff.extend_from_slice(&self.args_len.to_be_bytes());
-        buff.extend_from_slice(&self.body_len.to_be_bytes());
+        buff.extend_from_slice(&self.args_len.to_ne_bytes());
+        buff.extend_from_slice(&self.body_len.to_ne_bytes());
         buff
     }
 }
@@ -245,13 +189,13 @@ impl TryFrom<Vec<u8>> for ProtocolHeader {
         let err = format!("protocol buff index error. buff len: {}", length);
 
         let proto_head_type: [u8; 2] = buff[2..4].try_into().unwrap();
-        let proto_head_type_num = u16::from_be_bytes(proto_head_type);
+        let proto_head_type_num = u16::from_ne_bytes(proto_head_type);
 
         let arg_len_buff: [u8; 4] = buff[4..8].try_into().unwrap();
         let body_len_buff: [u8; 8] = buff[8..16].try_into().unwrap();
 
-        let args_len = u32::from_be_bytes(arg_len_buff);
-        let body_len = u64::from_be_bytes(body_len_buff);
+        let args_len = u32::from_ne_bytes(arg_len_buff);
+        let body_len = u64::from_ne_bytes(body_len_buff);
         let header_type = ProtocolHeaderType::from(proto_head_type_num);
         let header = ProtocolHeader {
             version: buff[0],
@@ -267,16 +211,7 @@ impl TryFrom<Vec<u8>> for ProtocolHeader {
 impl ProtocolArgs {
     pub fn len(&self) -> usize {
         match self {
-            // ProtocolArgs::Str(s) => s.len(),
-            // ProtocolArgs::Bytes(b) => b.len(),
-            // ProtocolArgs::Int(i) => 4,
             ProtocolArgs::Null => 0,
-            // ProtocolArgs::Bool(b) => 1,
-            // ProtocolArgs::Float(f) => 8,
-            // ProtocolArgs::TunnelStart(arg) => {
-            //     let buff = serde_json::to_vec(&arg).unwrap();
-            //     buff.len()
-            // }
         }
     }
     pub fn make(head_type: ProtocolHeaderType, buff: Vec<u8>) -> MQResult<ProtocolArgs> {
@@ -346,7 +281,6 @@ impl Protocol {
             args: proto_args,
             body: proto_body,
         };
-        // debug!("recv protocol: {:?}", &proto);
         Ok(proto)
     }
 
@@ -355,7 +289,6 @@ impl Protocol {
     where
         T: AsyncWriteExt + Unpin,
     {
-        // debug!("ready send protocol: {:?}", &proto);
         let mut args_buff = vec![];
         let args_buff_len = proto.header.args_len.clone();
         let body_buff_len = proto.header.body_len.clone();
@@ -434,14 +367,8 @@ async fn test_protocol() {
     };
 
     let head = ProtocolHeader::new(ProtocolHeaderType::RegisterSubscriber, 3, 2);
-    // let proto = Protocol::new(
-    //     ProtocolHeaderType::Disconnect,
-    //     ProtocolArgs::Null,
-    //     generate_random_string(10).as_bytes().to_vec(),
-    // );
     println!("head: {:?}", &head);
     let buff: Vec<u8> = head.clone().into();
-    // let buf: [u8; PROTOCOL_HEAD_LENGTH] = buff[0..PROTOCOL_HEAD_LENGTH];
     let new_head = ProtocolHeader::try_from(buff).unwrap();
     println!("new head:{:?}", new_head);
     assert_eq!(head.version, new_head.version);
@@ -449,6 +376,4 @@ async fn test_protocol() {
     assert_eq!(head.p_type as u16, new_head.p_type as u16);
     assert_eq!(head.args_len, new_head.args_len);
     assert_eq!(head.body_len, new_head.body_len);
-    // assert!(proto.args, new_proto.args);
-    // assert!(proto.body, new_proto.body);
 }

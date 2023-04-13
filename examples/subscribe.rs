@@ -13,8 +13,8 @@ extern crate serde;
 use lightmq::connect_handle::ProtocolBodyRegisterPublisher;
 use lightmq::err::{MQError, MQResult};
 use lightmq::logger::init_console_log;
+use lightmq::message::{Message, ValueType};
 use lightmq::protocol::{Protocol, ProtocolArgs, ProtocolHeaderType};
-use lightmq::session::{Message, ValueType};
 use lightmq::utils::convert::{BuffUtil, StringUtil};
 use lightmq::utils::stream::{Buff, StreamUtil};
 use std::net::ToSocketAddrs;
@@ -71,7 +71,7 @@ async fn subscribe(topic: String) {
                                 .format("%Y-%m-%d %H:%M:%S.%f")
                                 .to_string(),
                             message.recv_time.format("%Y-%m-%d %H:%M:%S.%f").to_string(),
-                            i32::from_be_bytes(buff)
+                            i32::from_ne_bytes(buff)
                         );
                     }
                     ValueType::Float => {
@@ -84,7 +84,7 @@ async fn subscribe(topic: String) {
                                 .format("%Y-%m-%d %H:%M:%S.%f")
                                 .to_string(),
                             message.recv_time.format("%Y-%m-%d %H:%M:%S.%f").to_string(),
-                            f64::from_be_bytes(buff)
+                            f64::from_ne_bytes(buff)
                         );
                     }
                     ValueType::Bytes => {
@@ -115,7 +115,7 @@ async fn subscribe(topic: String) {
 
 #[tokio::main]
 async fn main() {
-    let log_level = "info".to_string();
+    let log_level = "warn".to_string();
     init_console_log(log_level);
     subscribe(TOPIC.to_string()).await;
 }

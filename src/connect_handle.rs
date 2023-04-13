@@ -4,12 +4,13 @@ use tokio::{
     time::Instant,
 };
 
+use crate::message::Message;
 use crate::{
     connector::{LocalContext, ServerContext},
     err::{ErrorCode, MQError, MQResult},
     protocol::{Protocol, ProtocolArgs, ProtocolHeader, ProtocolHeaderType},
     session::{
-        AddTopic, Endpoint, Message, RegisterPublisherRequestParam, RegisterSubscribeRequestParam,
+        AddTopic, Endpoint, RegisterPublisherRequestParam, RegisterSubscribeRequestParam,
         SessionManagerRequest, SessionManagerResponse, SessionRequest, SessionResponse,
         CHANNEL_BUFFER_LENGTH,
     },
@@ -108,8 +109,8 @@ impl ConnectorHandler {
             match self.recv_client_publish_message(&endpoint).await {
                 Ok(_) => {}
                 Err(e) => {
-                    if let MQError::IoError(w) = &e {
-                        warn!("[{}] io closed. warn: {}", peer_addr, w);
+                    if let MQError::IoError(x) = &e {
+                        warn!("[{}] io closed. {}", peer_addr, x);
                         break;
                     };
                     error!("{}", e);
@@ -232,7 +233,7 @@ impl ConnectorHandler {
                 Ok(_) => {}
                 Err(e) => {
                     if let MQError::IoError(w) = &e {
-                        warn!("[{}] io closed. warn: {}", peer_addr, w);
+                        warn!("[{}] io closed. {}", peer_addr, w);
                         break;
                     };
                     error!("{}", e)
@@ -244,8 +245,22 @@ impl ConnectorHandler {
 
     // 向session注册为发布者
     async fn register_subscriber(&mut self, tx: &Sender<SessionRequest>) -> MQResult<Endpoint> {
+        let peer = self
+            .local_context
+            .stream
+            .peer_addr()
+            .map_err(|e| {
+                MQError::E(format!(
+                    "get peer connect failed from local stream.\n\terror: {}",
+                    e
+                ))
+            })?
+            .to_string();
         let (mut tx2, mut rx2) = mpsc::channel::<SessionResponse>(CHANNEL_BUFF_LEN);
-        let param = RegisterSubscribeRequestParam { tx: tx2 };
+        let param = RegisterSubscribeRequestParam {
+            tx: tx2,
+            name: peer,
+        };
 
         let res = ChannelUtil::request::<SessionRequest, SessionResponse>(
             tx,

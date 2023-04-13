@@ -53,7 +53,7 @@ impl BuffUtil {
         let buf: [u8; 8] = buff[0..8].try_into().map_err(|e| {
             MQError::ConvertError(format!("the buff try into [u8; 8] failed.\n\terror:{}", e))
         })?;
-        let f = f64::from_be_bytes(buf);
+        let f = f64::from_ne_bytes(buf);
         Ok(f)
     }
 
@@ -64,7 +64,7 @@ impl BuffUtil {
         let buf: [u8; 4] = buff[0..4].try_into().map_err(|e| {
             MQError::ConvertError(format!("the buff try into [u8; 4] failed.\n\terror:{}", e))
         })?;
-        let x = i32::from_be_bytes(buf);
+        let x = i32::from_ne_bytes(buf);
         Ok(x)
     }
 

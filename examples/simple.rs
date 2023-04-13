@@ -14,8 +14,8 @@ use chrono::Utc;
 use lightmq::connect_handle::ProtocolBodyRegisterPublisher;
 use lightmq::err::{MQError, MQResult};
 use lightmq::logger::init_console_log;
+use lightmq::message::{Message, ValueType};
 use lightmq::protocol::{Protocol, ProtocolArgs, ProtocolHeaderType};
-use lightmq::session::{Message, ValueType};
 use lightmq::utils::convert::{BuffUtil, StringUtil};
 use lightmq::utils::stream::{Buff, StreamUtil};
 use rand::Rng;
@@ -97,7 +97,7 @@ async fn subscribe(topic: String) {
                                 .format("%Y-%m-%d %H:%M:%S.%f")
                                 .to_string(),
                             message.recv_time.format("%Y-%m-%d %H:%M:%S.%f").to_string(),
-                            i32::from_be_bytes(buff)
+                            i32::from_ne_bytes(buff)
                         );
                     }
                     ValueType::Float => {
@@ -110,7 +110,7 @@ async fn subscribe(topic: String) {
                                 .format("%Y-%m-%d %H:%M:%S.%f")
                                 .to_string(),
                             message.recv_time.format("%Y-%m-%d %H:%M:%S.%f").to_string(),
-                            f64::from_be_bytes(buff)
+                            f64::from_ne_bytes(buff)
                         );
                     }
                     ValueType::Bytes => {
@@ -174,12 +174,12 @@ async fn publish(topic: String, publish_num: usize) {
         } else if i % 4 == 1 {
             let v = generate_random_i32();
             info!("[topic-{}] publish int: {}", &topic, &v);
-            buff = v.to_be_bytes().to_vec();
+            buff = v.to_ne_bytes().to_vec();
             value_type = ValueType::Int;
         } else if i % 4 == 2 {
             let v = generate_random_f64();
             info!("[topic-{}] publish float: {}", &topic, &v);
-            buff = v.to_be_bytes().to_vec();
+            buff = v.to_ne_bytes().to_vec();
             value_type = ValueType::Float;
         } else {
             let v = generate_random_string(32);

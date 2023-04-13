@@ -11,7 +11,7 @@ extern crate tokio;
 extern crate serde;
 use chrono::{DateTime, TimeZone, Utc};
 use lightmq::connect_handle::ProtocolBodyRegisterPublisher;
-use lightmq::session::{Message, ValueType};
+use lightmq::message::{Message, ValueType};
 use rand::Rng;
 
 use lightmq::err::{MQError, MQResult};
@@ -75,8 +75,6 @@ async fn publish(topic: String, publish_num: usize) {
 
     // loop {
     for i in 0..publish_num {
-        let sleep_ms = 100;
-        // tokio::time::sleep(Duration::from_millis(sleep_ms)).await;
         let current = Utc::now();
         let mut buff: Vec<u8> = vec![];
         let mut value_type = ValueType::Null;
@@ -88,12 +86,12 @@ async fn publish(topic: String, publish_num: usize) {
         } else if i % 4 == 1 {
             let v = generate_random_i32();
             info!("[topic-{}] publish int: {}", &topic, &v);
-            buff = v.to_be_bytes().to_vec();
+            buff = v.to_ne_bytes().to_vec();
             value_type = ValueType::Int;
         } else if i % 4 == 2 {
             let v = generate_random_f64();
             info!("[topic-{}] publish float: {}", &topic, &v);
-            buff = v.to_be_bytes().to_vec();
+            buff = v.to_ne_bytes().to_vec();
             value_type = ValueType::Float;
         } else {
             let v = generate_random_string(32);
@@ -122,11 +120,12 @@ async fn publish(topic: String, publish_num: usize) {
 
 #[tokio::main]
 async fn main() {
-    let log_level = "error".to_string();
+    let log_level = "warn".to_string();
     init_console_log(log_level);
     let start = Instant::now();
 
-    publish(TOPIC.to_string(), 10).await;
+    // 30s ,1000000条数据
+    publish(TOPIC.to_string(), 1000000).await;
     let end = Instant::now();
     let duration = end - start;
     println!("publish end, use time: {:?}", duration);

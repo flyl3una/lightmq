@@ -1,13 +1,13 @@
 use crate::err::{MQError, MQResult};
+use crate::message::Message;
+use crate::storage::Store;
 use chrono::{DateTime, TimeZone, Utc};
 use std::collections::HashMap;
-use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::sync::mpsc;
 use tokio::sync::mpsc::{Receiver, Sender};
-use tokio::time::Instant;
 use uuid::Uuid;
 
-pub const CHANNEL_BUFFER_LENGTH: usize = 1024*1000;
+pub const CHANNEL_BUFFER_LENGTH: usize = 1024 * 100;
 
 #[derive(Debug)]
 pub struct SessionManager {
@@ -18,38 +18,6 @@ pub struct SessionManager {
     // 基于topic的消息队列 topic: MessageQueue
     // pub message_queue: HashMap<String, Session>,
     pub session_queue_tx: HashMap<String, Sender<SessionRequest>>,
-}
-
-#[derive(Debug, Clone)]
-#[repr(C)]
-pub enum ValueType {
-    Null = 1,
-    Bool = 2,
-    Str = 3,
-    Int = 4,
-    Float = 5,
-    Bytes = 6,
-}
-
-// 与connector交互数据的消息
-#[derive(Debug, Clone)]
-pub struct Message {
-    // 消息主题
-    // pub topic: String,
-    // 消息发送时间
-    pub create_time: DateTime<Utc>,
-    pub send_time: DateTime<Utc>,
-    // 发送时间
-    pub recv_time: DateTime<Utc>,
-    // 数据类型
-    pub value_type: ValueType,
-    // 数据长度
-    pub value_length: u64,
-    // 数据内容
-    pub value: Vec<u8>,
-    // 消息内容
-    // pub value: Value,
-    // pub value: serde_json::Value,
 }
 
 // 添加topic
@@ -119,6 +87,7 @@ pub enum SessionManagerResponse {
 #[derive(Debug)]
 pub struct RegisterSubscribeRequestParam {
     pub tx: Sender<SessionResponse>,
+    pub name: String,
 }
 
 #[derive(Debug)]
@@ -169,27 +138,6 @@ pub enum SessionResponse {
     ConsumeMessage(Message),
 }
 
-// // 消费者、生产者 请求端，在connector 处进行使用
-// pub struct RequestEndpoint {
-//     // pub name: String,
-//     pub uuid: String,
-//     // 接收session返回的消息相应
-//     // pub response_rx: Receiver<SessionResponse>,
-//     // 向session发送消息请求， response_rx在session里， 该值由session的tx克隆而来
-//     pub tx: Sender<SessionResponse>,
-//
-// }
-//
-// // 消费者、生产者 相应端，在session处进行接收处理
-// pub struct ResponseEndpoint {
-//     // pub name: String,
-//     pub uuid: String,
-//     // session向消费者发送响应数据
-//     pub tx: Sender<SessionResponse>,
-//     // 接收请求端发送的消息请求, 使用session中的rx
-//     // pub request_rx: Receiver<TransferMessageRequest>,
-// }
-
 // 消费者、生产者 相应端，在session处进行接收处理
 #[derive(Debug)]
 pub struct SessionEndpoint {
@@ -232,6 +180,12 @@ struct Session {
     pub subscribers: Vec<SessionEndpoint>,
     // 生产者
     pub Publisheres: Vec<SessionEndpoint>,
+
+    // 数据存储
+    pub store: Store,
+
+    // 是否正在向订阅者发送数据
+    pub b_publish: bool,
 }
 
 impl Session {
@@ -242,6 +196,8 @@ impl Session {
             tx: tx1,
             subscribers: vec![],
             Publisheres: vec![],
+            store: Store::new(),
+            b_publish: false,
         }
     }
 
@@ -290,34 +246,10 @@ impl Session {
         use SessionRequest::*;
         match request {
             RegisterSubscribe(x) => {
-                let res = match self.create_subscriber() {
-                    Ok(endpoint) => SessionResponse::Subscriber(endpoint),
-                    Err(e) => SessionResponse::Result(ResponseMsg {
-                        code: 1,
-                        msg: e.to_string(),
-                    }),
-                };
-                x.tx.send(res).await.map_err(|e| {
-                    MQError::E(format!(
-                        "send register subscriber response failed. e: {}",
-                        e
-                    ))
-                })?;
+                self.recv_register_subscribe(x).await?;
             }
             RegisterPublisher(x) => {
-                let res = match self.create_publisher() {
-                    Ok(endpoint) => SessionResponse::Publisher(endpoint),
-                    Err(e) => SessionResponse::Result(ResponseMsg {
-                        code: 1,
-                        msg: e.to_string(),
-                    }),
-                };
-                x.tx.send(res).await.map_err(|e| {
-                    MQError::E(format!(
-                        "send register Publisher response failed.\n\terror: {}",
-                        e
-                    ))
-                })?;
+                self.recv_register_publish(x).await?;
             }
             RemoveSubscribe(x) => {
                 self.remove_subscriber(x.uuid.clone());
@@ -332,18 +264,7 @@ impl Session {
             // }
             PublishMessage(mut msg) => {
                 // 生产数据, 向所有在线消费者发送消息
-                debug!("recv publish message:{:?}", &msg);
-                let current_time = Utc::now();
-                msg.send_time = Utc::now();
-                for subscriber in self.subscribers.iter() {
-                    subscriber
-                        .tx
-                        .send(SessionResponse::ConsumeMessage(msg.clone()))
-                        .await
-                        .map_err(|e| {
-                            MQError::E(format!("send message to subscriber failed. e: {}", e))
-                        })?;
-                }
+                self.recv_publish_msg(msg).await;
             }
             _ => {
                 error!("no support message.");
@@ -354,7 +275,7 @@ impl Session {
 
     pub async fn listen(&mut self) -> MQResult<()> {
         while let Some(mut request) = self.rx.recv().await {
-            info!("session get request: {:?}", &request);
+            debug!("session get request:\n{:?}", &request);
             match self.deal_request(request).await {
                 Ok(_) => {}
                 Err(e) => {
@@ -363,6 +284,96 @@ impl Session {
             }
         }
         Ok(())
+    }
+
+    // 注册订阅者
+    pub async fn recv_register_subscribe(
+        &mut self,
+        x: RegisterSubscribeRequestParam,
+    ) -> MQResult<()> {
+        info!("register subscribe: {}", &x.name);
+        let res = match self.create_subscriber() {
+            Ok(endpoint) => SessionResponse::Subscriber(endpoint),
+            Err(e) => SessionResponse::Result(ResponseMsg {
+                code: 1,
+                msg: e.to_string(),
+            }),
+        };
+        x.tx.send(res).await.map_err(|e| {
+            MQError::E(format!(
+                "send register subscriber response failed. e: {}",
+                e
+            ))
+        })?;
+        // 触发一次订阅数据的获取
+        self.send_msg_to_subscribers().await;
+        Ok(())
+    }
+
+    // 注册发布者
+    pub async fn recv_register_publish(
+        &mut self,
+        x: RegisterPublisherRequestParam,
+    ) -> MQResult<()> {
+        let res = match self.create_publisher() {
+            Ok(endpoint) => SessionResponse::Publisher(endpoint),
+            Err(e) => SessionResponse::Result(ResponseMsg {
+                code: 1,
+                msg: e.to_string(),
+            }),
+        };
+        x.tx.send(res).await.map_err(|e| {
+            MQError::E(format!(
+                "send register Publisher response failed.\n\terror: {}",
+                e
+            ))
+        })?;
+        Ok(())
+    }
+
+    // 接收到发布的消息
+    pub async fn recv_publish_msg(&mut self, mut msg: Message) -> MQResult<()> {
+        info!("recv publish message: {}", &msg);
+        let current_time = Utc::now();
+        msg.send_time = Utc::now();
+        // 将数据发送到数据中心（内存、持久化引擎）， 然后再触发订阅者拉取数据。
+        self.store.push(msg);
+        if self.subscribers.len() > 0 {
+            self.send_msg_to_subscribers().await;
+        }
+        Ok(())
+    }
+
+    pub async fn send_msg_to_subscriber(&mut self) -> MQResult<()> {
+        while let Some(msg) = self.store.pop() {
+            for subscriber in self.subscribers.iter() {
+                subscriber
+                    .tx
+                    .send(SessionResponse::ConsumeMessage(msg.clone()))
+                    .await
+                    .map_err(|e| {
+                        MQError::E(format!("send message to subscriber failed. e: {}", e))
+                    })?;
+            }
+        }
+        Ok(())
+    }
+
+    // 获取缓冲区数据并将数据发送给注册该主题的所有订阅者
+    pub async fn send_msg_to_subscribers(&mut self) {
+        if self.b_publish {
+            // 当前有其他操作正在发送数据，不再重复触发
+            warn!("send msg to subscribe, other thread occupied.");
+            return;
+        }
+        self.b_publish = true;
+        match self.send_msg_to_subscriber().await {
+            Ok(_) => (),
+            Err(e) => {
+                error!("send_msg_to_subscribers failed: {}", e);
+            }
+        }
+        self.b_publish = false;
     }
 }
 
@@ -396,12 +407,6 @@ impl SessionManager {
                 let r = session_tx.send(SessionRequest::Break).await.map_err(|e| {
                     MQError::E(format!("send remove topic result failed. e: {}", e))
                 })?;
-                // for subscriber in session {
-                //     subscriber.tx.send(SessionResponse::BreakSession).await;
-                // }
-                // for Publisher in session.Publisheres.iter() {
-                //     Publisher.tx.send(SessionResponse::BreakSession).await;
-                // }
                 Ok(())
             }
             None => Err(MQError::E(format!("the topic does not exist"))),
@@ -412,7 +417,7 @@ impl SessionManager {
         // 判断是否退出
         // Receive the data
         while let Some(session_manager_request) = self.rx.recv().await {
-            println!("session manager request: {:?}", &session_manager_request);
+            debug!("session manager request: {:?}", &session_manager_request);
             match self.deal_manager_request(session_manager_request).await {
                 Ok(_) => {}
                 Err(e) => {
@@ -448,7 +453,6 @@ impl SessionManager {
                         };
                         // 将该session放在线程中监听。
                         // 创建异步任务并将其放入后台队列。
-                        // session.create_subscribe()
                         tokio::spawn(async {
                             let mut s = session;
                             match s.listen().await {
@@ -505,90 +509,5 @@ impl SessionManager {
             }
         }
         Ok(())
-    }
-}
-
-impl TryFrom<Vec<u8>> for Message {
-    type Error = MQError;
-
-    fn try_from(value: Vec<u8>) -> Result<Self, Self::Error> {
-        let err = "protocol buff must more than 33 byte.".to_string();
-        if value.len() < 33 {
-            return Err(Self::Error::E(err));
-        }
-        // let type_buff: [u8; 4] = buff[1..5].try_into().expect(err.as_str());
-        let create_times_buff: [u8; 8] = value[0..8].try_into().expect(err.as_str());
-        let send_times_buff: [u8; 8] = value[8..16].try_into().expect(err.as_str());
-        let recv_times_buff: [u8; 8] = value[16..24].try_into().expect(err.as_str());
-        let value_len_buff: [u8; 8] = value[25..33].try_into().expect(err.as_str());
-        // let proto_head_type_num = u16::from_be_bytes(value[0..16]);
-        let create_timestamp = i64::from_be_bytes(create_times_buff);
-        let send_timestamp = i64::from_be_bytes(send_times_buff);
-        let recv_timestamp = i64::from_be_bytes(recv_times_buff);
-        let value_len = u64::from_be_bytes(value_len_buff);
-
-        Ok(Self {
-            create_time: Utc.timestamp_nanos(create_timestamp),
-            send_time: Utc.timestamp_nanos(send_timestamp),
-            recv_time: Utc.timestamp_nanos(recv_timestamp),
-            value_length: value_len,
-            value_type: ValueType::try_from(value[24])?,
-            value: value[33..].to_vec(),
-        })
-        // let create_time_buf = value[0..]
-    }
-}
-
-impl Into<Vec<u8>> for Message {
-    fn into(self) -> Vec<u8> {
-        let mut buff: Vec<u8> = vec![];
-        // let create_time_num: u128 = self
-        //     .create_time
-        //     .duration_since(UNIX_EPOCH)
-        //     .unwrap()
-        //     .as_nanos();
-        // let send_time_num: u128 = self
-        //     .send_time
-        //     .duration_since(UNIX_EPOCH)
-        //     .unwrap()
-        //     .as_nanos();
-        // let recv_time_num: u128 = self
-        //     .recv_time
-        //     .duration_since(UNIX_EPOCH)
-        //     .unwrap()
-        //     .as_nanos();
-        let create_time_num = self.create_time.timestamp_nanos();
-        let send_time_num = self.create_time.timestamp_nanos();
-        let recv_time_num = self.create_time.timestamp_nanos();
-        buff.extend_from_slice(&create_time_num.to_be_bytes());
-        buff.extend_from_slice(&send_time_num.to_be_bytes());
-        buff.extend_from_slice(&recv_time_num.to_be_bytes());
-        buff.push(self.value_type as u8);
-        buff.extend_from_slice(&self.value_length.to_be_bytes());
-        buff.extend_from_slice(&self.value);
-        buff
-    }
-}
-
-impl TryFrom<u8> for ValueType {
-    type Error = MQError;
-
-    fn try_from(value: u8) -> Result<Self, Self::Error> {
-        use ValueType::*;
-        if value == Null as u8 {
-            Ok(Null)
-        } else if value == Bool as u8 {
-            Ok(Bool)
-        } else if value == Str as u8 {
-            Ok(Str)
-        } else if value == Int as u8 {
-            Ok(Int)
-        } else if value == Float as u8 {
-            Ok(Float)
-        } else if value == Bytes as u8 {
-            Ok(Bytes)
-        } else {
-            Err(MQError::E(format!("not match value type: {}", value)))
-        }
     }
 }
