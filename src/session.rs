@@ -2,6 +2,7 @@ use crate::err::{MQError, MQResult};
 use crate::message::Message;
 use crate::storage::Store;
 use chrono::{DateTime, TimeZone, Utc};
+use std::cmp::min;
 use std::collections::HashMap;
 use tokio::sync::mpsc;
 use tokio::sync::mpsc::{Receiver, Sender};
@@ -9,7 +10,6 @@ use tokio::time::{sleep, Duration};
 use uuid::Uuid;
 
 pub const CHANNEL_BUFFER_LENGTH: usize = 1024 * 10;
-pub const PULL_SLEEP_SECONDS: u64 = 3;
 
 #[derive(Debug)]
 pub struct SessionManager {
@@ -185,6 +185,8 @@ pub enum SessionResponse {
 
     // 将数据发送到消费者
     PullMessage(ResponseResult<Vec<Message>>),
+    // 无可以拉取数据，需要等待
+    NotPullMessage,
 }
 
 // 消费者、生产者 相应端，在session处进行接收处理
@@ -232,6 +234,8 @@ struct Session {
     // 生产者
     pub publisher_map: HashMap<String, SessionEndpoint>,
 
+    // 所有订阅者的最小 offset
+    pub min_offset: usize,
     // 数据存储
     pub store: Store,
 
@@ -249,6 +253,7 @@ impl Session {
             publisher_map: HashMap::new(),
             store: Store::new(),
             b_publish: false,
+            min_offset: 0,
         }
     }
 
@@ -264,7 +269,7 @@ impl Session {
         let session_endpoint = SessionEndpoint {
             uuid: uuid.to_string(),
             tx: tx1,
-            offset: 0,
+            offset: self.min_offset.clone(),
         };
         Ok((endpoint, session_endpoint))
     }
@@ -316,8 +321,10 @@ impl Session {
                 // x.tx.send(SessionResponse::Result(ResponseMsg{code: 0, msg: e.to_string()})).await?;
             }
             PullMessage(param) => {
-                self.recv_pull_msg(param).await;
                 // 消费数据
+                self.recv_pull_msg(param).await;
+                // pull数据后更新下最小偏移值
+                self.update_min_offset();
             }
             PushMessage(mut param) => {
                 // 生产数据, 向所有在线消费者发送消息
@@ -409,38 +416,30 @@ impl Session {
                 return Err(MQError::E(format!("no publisher for uuid: {}", param.uuid)));
             }
         }
-
-        // if self.subscribers.len() > 0 {
-        //     self.send_msg_to_subscribers().await;
-        // }
         Ok(())
     }
 
     // 接收到发布的消息
     pub async fn recv_pull_msg(&mut self, mut param: PullMessageRequestParam) -> MQResult<()> {
-        info!("recv pull message: {:?}", &param);
+        debug!("recv pull message: {:?}", &param);
         debug!("store: {:?}", &self.store);
         // let current_time = Utc::now();
         let number = param.number.clone();
-        // msg.send_time = Utc::now();
         // 将数据发送到数据中心（内存、持久化引擎）， 然后再触发订阅者拉取数据。
-        // let number = param.number;
-        // for i in 0..number {
         // 从下标拿取数据
         match self.subscriber_map.get_mut(&param.uuid) {
             Some(session_endpoint) => {
                 let index = session_endpoint.offset.clone();
-                info!("current offset is {}", &index);
-                while index >= self.store.message_number() {
+                if index >= self.store.message_number() {
                     // TODO： 当client连接断开时，需要向session发送中断操作，防止该订阅者的这个消息被消费
-                    sleep(Duration::from_secs(PULL_SLEEP_SECONDS)).await;
-                    // let s = tokio::task::spawn_blocking(move || {
-                    //     sleep(Duration::from_secs(3));
-                    // })
-                    // .await;
-                    info!("sleep...");
-                    // tokio::task::spawn_blocking(0.2.0)
-                    // tokio::time::delay_for(0.2.0)
+                    session_endpoint
+                        .tx
+                        .send(SessionResponse::NotPullMessage)
+                        .await
+                        .map_err(|e| {
+                            MQError::E(format!("send message to subscriber failed. e: {}", e))
+                        })?;
+                    return Ok(());
                 }
                 let mut end_index = index.clone() + number as usize;
                 if end_index > self.store.message_number() {
@@ -483,12 +482,26 @@ impl Session {
                 )));
             }
         }
-        // let msg = self.store.get(0)
-        // }
-        // self.store.push(msg);
-        // info!("stoe: {:?}", &self.store);
-
         Ok(())
+    }
+
+    fn get_min_offset(&self) -> usize {
+        let mut min_offset = usize::MAX;
+        if self.subscriber_map.len() == 0 {
+            return 0;
+        }
+        for (k, subscribe_endpoint) in self.subscriber_map.iter() {
+            // if min_offset < subscribe_endpoint.offset {
+            //     min_offset = subscribe_endpoint.offset;
+            // }
+            min_offset = min(min_offset, subscribe_endpoint.offset);
+        }
+        min_offset
+    }
+
+    fn update_min_offset(&mut self) {
+        self.min_offset = self.get_min_offset();
+        info!("current min offset: {}", &self.min_offset);
     }
 }
 

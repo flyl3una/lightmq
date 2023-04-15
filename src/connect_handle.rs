@@ -3,7 +3,7 @@ use std::vec;
 use chrono::Utc;
 use tokio::{
     sync::mpsc::{self, Sender},
-    time::Instant,
+    time::{sleep, Duration, Instant},
 };
 
 use crate::{
@@ -22,6 +22,8 @@ use crate::{
     },
 };
 use crate::{message::Message, protocol::PullRequest};
+
+pub const PULL_SLEEP_SECONDS: u64 = 3;
 
 // 处理接收到的链接
 pub async fn handle_connect(
@@ -391,20 +393,8 @@ impl ConnectorHandler {
         match protocol.header.p_type.clone() {
             PullMessage => {
                 let pull_request = serde_json::from_slice::<PullRequest>(&protocol.body)?;
-                let param = PullMessageRequestParam {
-                    // TODO: 拉取数量还需要确认实现罗技
-                    number: pull_request.number,
-                    uuid: endpoint.uuid.to_string(),
-                };
-                let pull_request_param = SessionRequest::PullMessage(param);
-                debug!("ready publish value: {:?}", pull_request_param);
-                let res = ChannelUtil::request::<SessionRequest, SessionResponse>(
-                    &mut endpoint.session_tx,
-                    &mut endpoint.rx,
-                    pull_request_param,
-                )
-                .await?;
-                self.recv_pull_response_to_client(res).await
+                self.recv_pull_response_to_client(endpoint, pull_request)
+                    .await
             }
             _ => Err(MQError::E(format!(
                 "only support pull message protocol head type. current head type: {}",
@@ -413,38 +403,65 @@ impl ConnectorHandler {
         }
     }
 
-    async fn recv_pull_response_to_client(&mut self, response: SessionResponse) -> MQResult<()> {
+    // 向session拉去消息并发送给客户端
+    async fn recv_pull_response_to_client(
+        &mut self,
+        endpoint: &mut Endpoint,
+        pull_request: PullRequest,
+    ) -> MQResult<()> {
         let current_time = Utc::now();
-        match response {
-            SessionResponse::PullMessage(result) => {
-                if !result.is_success() {
-                    return Err(MQError::E(result.error().to_string()));
-                }
-                match result.data {
-                    Some(mut data) => {
-                        // TODO: 此处可以优化，不传json数据，直接返回二进制，可以优化时间
-                        // let mut message_buffs: Vec<Vec<u8>> = vec![];
-                        for msg in data.iter_mut() {
-                            msg.fetch_timestamp = current_time.timestamp_nanos();
-                            // let buff = msg.into();
-                            // message_buffs.push(buff);
-                        }
-                        let proto = Protocol::new(
-                            ProtocolHeaderType::PullMessageRes,
-                            ProtocolArgs::Null,
-                            serde_json::to_vec(&data).map_err(|e| {
-                                MQError::ConvertError(
-                                    "convert message buffs to json failed.".to_string(),
-                                )
-                            })?,
-                        );
-                        Protocol::send(&mut self.local_context.stream, proto).await?
+
+        // 是否需要重新发送
+        let mut b_pull = true;
+        while b_pull {
+            b_pull = false;
+            let param = PullMessageRequestParam {
+                // TODO: 拉取数量还需要确认实现罗技
+                number: pull_request.number,
+                uuid: endpoint.uuid.to_string(),
+            };
+
+            let pull_request_param = SessionRequest::PullMessage(param);
+            debug!("ready pull value: {:?}", pull_request_param);
+            let response = ChannelUtil::request::<SessionRequest, SessionResponse>(
+                &mut endpoint.session_tx,
+                &mut endpoint.rx,
+                pull_request_param,
+            )
+            .await?;
+            match response {
+                SessionResponse::PullMessage(result) => {
+                    if !result.is_success() {
+                        return Err(MQError::E(result.error().to_string()));
                     }
-                    None => return Err(MQError::E(format!("the pull message is None."))),
+                    match result.data {
+                        Some(mut data) => {
+                            // TODO: 此处可以优化，不传json数据，直接返回二进制，可以优化时间
+                            for msg in data.iter_mut() {
+                                msg.fetch_timestamp = current_time.timestamp_nanos();
+                            }
+                            let proto = Protocol::new(
+                                ProtocolHeaderType::PullMessageRes,
+                                ProtocolArgs::Null,
+                                serde_json::to_vec(&data).map_err(|e| {
+                                    MQError::ConvertError(
+                                        "convert message buffs to json failed.".to_string(),
+                                    )
+                                })?,
+                            );
+                            Protocol::send(&mut self.local_context.stream, proto).await?
+                        }
+                        None => return Err(MQError::E(format!("the pull message is None."))),
+                    }
                 }
-            }
-            _ => {
-                error!("push data not suuport response type.")
+                SessionResponse::NotPullMessage => {
+                    b_pull = true;
+                    debug!("not pull message, ready reattempt send pull request.");
+                    sleep(Duration::from_secs(PULL_SLEEP_SECONDS)).await
+                }
+                _ => {
+                    error!("push data not suuport response type.")
+                }
             }
         }
         Ok(())
