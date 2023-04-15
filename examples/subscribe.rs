@@ -46,6 +46,7 @@ async fn subscribe_all(topic: &str, num: u32) {
     instant.register_subscriber(topic, "subscribe-test1").await;
     let index = 0u32;
     loop {
+        info!("pull message number: {}", num);
         match instant.pull(num).await {
             Ok(message) => {
                 info!("message: {:?}", message);
