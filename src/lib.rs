@@ -9,6 +9,7 @@ pub mod protocol;
 // pub mod tunnel;
 pub mod connect_handle;
 mod connector;
+pub mod instant;
 pub mod message;
 pub mod session;
 pub mod storage;

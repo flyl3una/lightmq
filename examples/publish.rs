@@ -10,7 +10,8 @@ extern crate tokio;
 #[macro_use]
 extern crate serde;
 use chrono::{DateTime, TimeZone, Utc};
-use lightmq::connect_handle::ProtocolBodyRegisterPublisher;
+use lightmq::connect_handle::ProtocolBodyRegisterQueue;
+use lightmq::instant::ClientInstant;
 use lightmq::message::{Message, ValueType};
 use rand::Rng;
 
@@ -53,79 +54,47 @@ fn generate_random_f64() -> f64 {
     num
 }
 
-async fn publish(topic: String, publish_num: usize) {
-    // let server_addr = "127.0.0.1:7221";
-    let mut stream = TcpStream::connect(SERVER_ADDR).await.unwrap();
-
-    let body = ProtocolBodyRegisterPublisher {
-        topic: topic.clone(),
-        name: "test-name".to_string(),
-    };
-    // let current_time = Utc::now();
-    // let message = Message{ create_time: current_time.clone(), send_time: current_time.clone(), recv_time: current_time, value_type: ValueType::Str, value_length: , value: todo!() }
-    // 发送订阅请求
-    let register_publish = serde_json::to_vec::<ProtocolBodyRegisterPublisher>(&body).unwrap();
-    let publish_proto = Protocol::new(
-        ProtocolHeaderType::RegisterPublisher,
-        ProtocolArgs::Null,
-        register_publish,
-    );
-    Protocol::send(&mut stream, publish_proto).await.unwrap();
-    debug!("send register publisher protocol successful.");
+async fn publish(topic: &str, publish_num: usize) {
+    let mut instant = ClientInstant::new(String::from(SERVER_ADDR));
+    instant.register_publisher(topic, "publish-test1").await;
 
     // loop {
     for i in 0..publish_num {
         let current = Utc::now();
         let mut buff: Vec<u8> = vec![];
-        let mut value_type = ValueType::Null;
+        // let mut value_type = ValueType::Null;
         if i % 4 == 0 {
             let v = generate_random_string(10);
             info!("[topic-{}] publish str: {}", &topic, &v);
-            buff = v.as_bytes().to_vec();
-            value_type = ValueType::Str;
+            instant.push_str(v).await.unwrap();
         } else if i % 4 == 1 {
             let v = generate_random_i32();
             info!("[topic-{}] publish int: {}", &topic, &v);
-            buff = v.to_ne_bytes().to_vec();
-            value_type = ValueType::Int;
+            instant.push_int(v).await.unwrap();
         } else if i % 4 == 2 {
             let v = generate_random_f64();
             info!("[topic-{}] publish float: {}", &topic, &v);
-            buff = v.to_ne_bytes().to_vec();
-            value_type = ValueType::Float;
+            instant.push_float(v).await.unwrap();
         } else {
             let v = generate_random_string(32);
             info!("[topic-{}] publish bytes: {:?}", &topic, &v);
-            buff = v.as_bytes().to_vec();
-            value_type = ValueType::Bytes;
+            instant.push_bytes(v.as_bytes().to_vec()).await.unwrap();
         }
-        let message = Message {
-            create_time: current.clone(),
-            send_time: current.clone(),
-            recv_time: current.clone(),
-            value_type,
-            value_length: buff.len() as u64,
-            value: buff,
-        };
-        let proto = Protocol::new(
-            ProtocolHeaderType::PublishMessage,
-            ProtocolArgs::Null,
-            message.into(),
-        );
         // info!("publish protocol: {:?}", &publish_proto);
-        Protocol::send(&mut stream, proto).await.unwrap();
+        // Protocol::send(&mut stream, proto).await.unwrap();
         debug!("send publish message protocol successful.");
     }
 }
 
 #[tokio::main]
 async fn main() {
-    let log_level = "warn".to_string();
+    let log_level = "info".to_string();
     init_console_log(log_level);
+
     let start = Instant::now();
 
     // 30s ,1000000条数据
-    publish(TOPIC.to_string(), 1000000).await;
+    publish(TOPIC, 10).await;
     let end = Instant::now();
     let duration = end - start;
     println!("publish end, use time: {:?}", duration);

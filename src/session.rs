@@ -5,9 +5,11 @@ use chrono::{DateTime, TimeZone, Utc};
 use std::collections::HashMap;
 use tokio::sync::mpsc;
 use tokio::sync::mpsc::{Receiver, Sender};
+use tokio::time::{sleep, Duration};
 use uuid::Uuid;
 
-pub const CHANNEL_BUFFER_LENGTH: usize = 1024 * 100;
+pub const CHANNEL_BUFFER_LENGTH: usize = 1024 * 10;
+pub const PULL_SLEEP_SECONDS: u64 = 3;
 
 #[derive(Debug)]
 pub struct SessionManager {
@@ -62,11 +64,6 @@ pub struct AddTopicResponse {
 }
 
 #[derive(Debug)]
-pub struct ResponseMsg {
-    pub code: i32,
-    pub msg: String,
-}
-#[derive(Debug)]
 pub struct RemoveTopicResponse {
     pub code: i32,
     pub msg: String,
@@ -108,6 +105,17 @@ pub struct RemoveSubscribeRequestParam {
 }
 
 #[derive(Debug)]
+pub struct PushMessageRequestParam {
+    pub uuid: String,
+    pub message: Message,
+}
+#[derive(Debug)]
+pub struct PullMessageRequestParam {
+    pub uuid: String,
+    pub number: u32,
+}
+
+#[derive(Debug)]
 pub enum SessionRequest {
     // 注册消费者
     RegisterSubscribe(RegisterSubscribeRequestParam),
@@ -119,10 +127,51 @@ pub enum SessionRequest {
     RemovePublisher(RemovePublisherRequestParam),
     // 订阅者消费数据
     // ConsumeMessage(Message),
+    PullMessage(PullMessageRequestParam),
     // 生产数据
-    PublishMessage(Message),
+    PushMessage(PushMessageRequestParam),
     // 中断
     Break,
+}
+
+// #[derive(Debug)]
+// pub struct ResponseMsg {
+//     pub code: i32,
+//     pub msg: String,
+// }
+
+// impl ResponseMsg {
+//     pub fn new(code: i32, msg: String) -> Self {
+//         ResponseMsg { code, msg }
+//     }
+//     pub fn is_success(&self) -> bool {
+//         self.code == 0i32
+//     }
+//     pub fn error(&self) -> &str {
+//         &self.msg
+//     }
+// }
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct ResponseResult<T> {
+    pub code: i32,
+    pub msg: String,
+    pub data: Option<T>,
+}
+impl<T> ResponseResult<T> {
+    pub fn new(code: i32, msg: String) -> Self {
+        ResponseResult {
+            code,
+            msg,
+            data: None,
+        }
+    }
+    pub fn is_success(&self) -> bool {
+        self.code == 0i32
+    }
+    pub fn error(&self) -> &str {
+        &self.msg
+    }
 }
 
 #[derive(Debug)]
@@ -132,10 +181,10 @@ pub enum SessionResponse {
     Subscriber(Endpoint),
     // 注册为发布者后，响应的消息端
     Publisher(Endpoint),
-    Result(ResponseMsg),
+    Result(ResponseResult<u8>),
 
     // 将数据发送到消费者
-    ConsumeMessage(Message),
+    PullMessage(ResponseResult<Vec<Message>>),
 }
 
 // 消费者、生产者 相应端，在session处进行接收处理
@@ -147,6 +196,8 @@ pub struct SessionEndpoint {
     pub tx: Sender<SessionResponse>,
     // 接收请求端发送的消息请求, 使用session中的rx
     // pub request_rx: Receiver<TransferMessageRequest>,
+    // 消费端获取数据的下标
+    pub offset: usize,
 }
 
 // 消费者，生产者， 使用端
@@ -177,9 +228,9 @@ struct Session {
     // 发送消息端，clone给使用者
     pub tx: Sender<SessionRequest>,
     // 消费者
-    pub subscribers: Vec<SessionEndpoint>,
+    pub subscriber_map: HashMap<String, SessionEndpoint>,
     // 生产者
-    pub Publisheres: Vec<SessionEndpoint>,
+    pub publisher_map: HashMap<String, SessionEndpoint>,
 
     // 数据存储
     pub store: Store,
@@ -194,8 +245,8 @@ impl Session {
         Session {
             rx: rx1,
             tx: tx1,
-            subscribers: vec![],
-            Publisheres: vec![],
+            subscriber_map: HashMap::new(),
+            publisher_map: HashMap::new(),
             store: Store::new(),
             b_publish: false,
         }
@@ -213,6 +264,7 @@ impl Session {
         let session_endpoint = SessionEndpoint {
             uuid: uuid.to_string(),
             tx: tx1,
+            offset: 0,
         };
         Ok((endpoint, session_endpoint))
     }
@@ -220,26 +272,30 @@ impl Session {
     // 创建一个消费者
     pub fn create_subscriber(&mut self) -> MQResult<Endpoint> {
         let (endpoint, session_endpoint) = self.create_endpoint()?;
-        self.subscribers.push(session_endpoint);
+        self.subscriber_map
+            .insert(endpoint.uuid.to_string(), session_endpoint);
+        // self.subscribers.push(session_endpoint);
         Ok(endpoint)
     }
 
     // 创建一个生产者
     pub fn create_publisher(&mut self) -> MQResult<Endpoint> {
         let (endpoint, session_endpoint) = self.create_endpoint()?;
-        self.Publisheres.push(session_endpoint);
+        self.publisher_map
+            .insert(endpoint.uuid.to_string(), session_endpoint);
         Ok(endpoint)
     }
 
     // 移除一个消费者
-    pub fn remove_subscriber(&mut self, uuid: String) {
-        self.subscribers.retain(|x| x.uuid != uuid);
+    pub fn remove_subscriber(&mut self, uuid: &String) {
+        self.subscriber_map.remove(uuid);
+        // self.subscribers.retain(|x| x.uuid != uuid);
     }
 
     // 移除一个生产者，
     // TODO: 移除时向消费端发送消息
-    pub fn remove_publisher(&mut self, uuid: String) {
-        self.Publisheres.retain(|x| x.uuid != uuid);
+    pub fn remove_publisher(&mut self, uuid: &String) {
+        self.publisher_map.remove(uuid);
     }
 
     pub async fn deal_request(&mut self, mut request: SessionRequest) -> MQResult<()> {
@@ -252,19 +308,20 @@ impl Session {
                 self.recv_register_publish(x).await?;
             }
             RemoveSubscribe(x) => {
-                self.remove_subscriber(x.uuid.clone());
+                self.remove_subscriber(&x.uuid);
                 // x.tx.send(SessionResponse::Result(ResponseMsg{code: 0, msg: e.to_string()})).await?;
             }
             RemovePublisher(x) => {
-                self.remove_publisher(x.uuid.clone());
+                self.remove_publisher(&x.uuid);
                 // x.tx.send(SessionResponse::Result(ResponseMsg{code: 0, msg: e.to_string()})).await?;
             }
-            // ConsumeMessage(msg) => {
-            //     // 消费数据
-            // }
-            PublishMessage(mut msg) => {
+            PullMessage(param) => {
+                self.recv_pull_msg(param).await;
+                // 消费数据
+            }
+            PushMessage(mut param) => {
                 // 生产数据, 向所有在线消费者发送消息
-                self.recv_publish_msg(msg).await;
+                self.recv_push_msg(param).await;
             }
             _ => {
                 error!("no support message.");
@@ -294,10 +351,7 @@ impl Session {
         info!("register subscribe: {}", &x.name);
         let res = match self.create_subscriber() {
             Ok(endpoint) => SessionResponse::Subscriber(endpoint),
-            Err(e) => SessionResponse::Result(ResponseMsg {
-                code: 1,
-                msg: e.to_string(),
-            }),
+            Err(e) => SessionResponse::Result(ResponseResult::new(1, e.to_string())),
         };
         x.tx.send(res).await.map_err(|e| {
             MQError::E(format!(
@@ -306,7 +360,7 @@ impl Session {
             ))
         })?;
         // 触发一次订阅数据的获取
-        self.send_msg_to_subscribers().await;
+        // self.send_msg_to_subscribers().await;
         Ok(())
     }
 
@@ -317,10 +371,7 @@ impl Session {
     ) -> MQResult<()> {
         let res = match self.create_publisher() {
             Ok(endpoint) => SessionResponse::Publisher(endpoint),
-            Err(e) => SessionResponse::Result(ResponseMsg {
-                code: 1,
-                msg: e.to_string(),
-            }),
+            Err(e) => SessionResponse::Result(ResponseResult::new(1, e.to_string())),
         };
         x.tx.send(res).await.map_err(|e| {
             MQError::E(format!(
@@ -332,48 +383,112 @@ impl Session {
     }
 
     // 接收到发布的消息
-    pub async fn recv_publish_msg(&mut self, mut msg: Message) -> MQResult<()> {
-        info!("recv publish message: {}", &msg);
+    pub async fn recv_push_msg(&mut self, mut param: PushMessageRequestParam) -> MQResult<()> {
+        info!("recv publish message: {:?}", &param);
         let current_time = Utc::now();
-        msg.send_time = Utc::now();
-        // 将数据发送到数据中心（内存、持久化引擎）， 然后再触发订阅者拉取数据。
-        self.store.push(msg);
-        if self.subscribers.len() > 0 {
-            self.send_msg_to_subscribers().await;
+        param.message.create_timestamp = current_time.timestamp_nanos();
+
+        // 响应成功消息
+        // 响应拉取数据消息
+        let res = ResponseResult::new(0, "".to_string());
+        match self.publisher_map.get_mut(&param.uuid) {
+            Some(session_endpoint) => {
+                // 将数据发送到数据中心（内存、持久化引擎）， 然后再触发订阅者拉取数据。
+                self.store.push(param.message);
+                debug!("store: {:?}", &self.store);
+                session_endpoint
+                    .tx
+                    .send(SessionResponse::Result(res))
+                    .await
+                    .map_err(|e| {
+                        MQError::E(format!("send message to publisher failed. e: {}", e))
+                    })?;
+            }
+            None => {
+                // ResponseResult::new(1, format!("find subscribe failed for uuid: {}", param.uuid));
+                return Err(MQError::E(format!("no publisher for uuid: {}", param.uuid)));
+            }
         }
+
+        // if self.subscribers.len() > 0 {
+        //     self.send_msg_to_subscribers().await;
+        // }
         Ok(())
     }
 
-    pub async fn send_msg_to_subscriber(&mut self) -> MQResult<()> {
-        while let Some(msg) = self.store.pop() {
-            for subscriber in self.subscribers.iter() {
-                subscriber
+    // 接收到发布的消息
+    pub async fn recv_pull_msg(&mut self, mut param: PullMessageRequestParam) -> MQResult<()> {
+        info!("recv pull message: {:?}", &param);
+        debug!("store: {:?}", &self.store);
+        // let current_time = Utc::now();
+        let number = param.number.clone();
+        // msg.send_time = Utc::now();
+        // 将数据发送到数据中心（内存、持久化引擎）， 然后再触发订阅者拉取数据。
+        // let number = param.number;
+        // for i in 0..number {
+        // 从下标拿取数据
+        match self.subscriber_map.get_mut(&param.uuid) {
+            Some(session_endpoint) => {
+                let index = session_endpoint.offset.clone();
+                info!("current offset is {}", &index);
+                while index >= self.store.message_number() {
+                    // TODO： 当client连接断开时，需要向session发送中断操作，防止该订阅者的这个消息被消费
+                    sleep(Duration::from_secs(PULL_SLEEP_SECONDS)).await;
+                    // let s = tokio::task::spawn_blocking(move || {
+                    //     sleep(Duration::from_secs(3));
+                    // })
+                    // .await;
+                    info!("sleep...");
+                    // tokio::task::spawn_blocking(0.2.0)
+                    // tokio::time::delay_for(0.2.0)
+                }
+                let mut end_index = index.clone() + number as usize;
+                if end_index > self.store.message_number() {
+                    // 当前获取的数据大于了消息队列总数， 只返回实际数量
+                    end_index = self.store.message_number()
+                }
+                info!("ready read message from [{} - {}]", &index, &end_index);
+                let res = match self.store.queue.get(index.clone()..end_index.clone()) {
+                    Some(msg_vec) => {
+                        let res = ResponseResult::<Vec<Message>> {
+                            code: 0,
+                            msg: "".to_string(),
+                            data: Some(msg_vec.to_vec()),
+                        };
+                        session_endpoint.offset = end_index;
+                        res
+                    }
+                    None => {
+                        error!("get msg failed. {}..{}", &index, &end_index);
+                        ResponseResult::new(
+                            1,
+                            format!("get msg failed from [{}-{}]", &index, &end_index),
+                        )
+                    }
+                };
+                // 响应拉取数据消息
+                session_endpoint
                     .tx
-                    .send(SessionResponse::ConsumeMessage(msg.clone()))
+                    .send(SessionResponse::PullMessage(res))
                     .await
                     .map_err(|e| {
                         MQError::E(format!("send message to subscriber failed. e: {}", e))
                     })?;
             }
-        }
-        Ok(())
-    }
-
-    // 获取缓冲区数据并将数据发送给注册该主题的所有订阅者
-    pub async fn send_msg_to_subscribers(&mut self) {
-        if self.b_publish {
-            // 当前有其他操作正在发送数据，不再重复触发
-            warn!("send msg to subscribe, other thread occupied.");
-            return;
-        }
-        self.b_publish = true;
-        match self.send_msg_to_subscriber().await {
-            Ok(_) => (),
-            Err(e) => {
-                error!("send_msg_to_subscribers failed: {}", e);
+            None => {
+                // ResponseResult::new(1, format!("find subscribe failed for uuid: {}", param.uuid));
+                return Err(MQError::E(format!(
+                    "no subscriber for uuid: {}",
+                    param.uuid
+                )));
             }
         }
-        self.b_publish = false;
+        // let msg = self.store.get(0)
+        // }
+        // self.store.push(msg);
+        // info!("stoe: {:?}", &self.store);
+
+        Ok(())
     }
 }
 

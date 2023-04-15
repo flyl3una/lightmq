@@ -18,4 +18,9 @@ impl Store {
     pub fn pop(&mut self) -> Option<Message> {
         self.queue.pop()
     }
+
+    // 消息个数
+    pub fn message_number(&mut self) -> usize {
+        self.queue.len()
+    }
 }

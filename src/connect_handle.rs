@@ -1,16 +1,18 @@
+use std::vec;
+
 use chrono::Utc;
 use tokio::{
     sync::mpsc::{self, Sender},
     time::Instant,
 };
 
-use crate::message::Message;
 use crate::{
     connector::{LocalContext, ServerContext},
     err::{ErrorCode, MQError, MQResult},
     protocol::{Protocol, ProtocolArgs, ProtocolHeader, ProtocolHeaderType},
     session::{
-        AddTopic, Endpoint, RegisterPublisherRequestParam, RegisterSubscribeRequestParam,
+        AddTopic, Endpoint, PullMessageRequestParam, PushMessageRequestParam,
+        RegisterPublisherRequestParam, RegisterSubscribeRequestParam, ResponseResult,
         SessionManagerRequest, SessionManagerResponse, SessionRequest, SessionResponse,
         CHANNEL_BUFFER_LENGTH,
     },
@@ -19,6 +21,7 @@ use crate::{
         convert::BuffUtil,
     },
 };
+use crate::{message::Message, protocol::PullRequest};
 
 // 处理接收到的链接
 pub async fn handle_connect(
@@ -54,7 +57,7 @@ pub async fn handle_connect(
 
 // 消息body类型
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ProtocolBodyRegisterPublisher {
+pub struct ProtocolBodyRegisterQueue {
     pub topic: String,
     pub name: String,
 }
@@ -92,21 +95,20 @@ impl ConnectorHandler {
     // 注册为发布者
     async fn publish(&mut self) -> MQResult<()> {
         // 向session_manager 添加topic，确保主题存在
-        // debug!("add topic: {}", self.topic);
         let session_tx = self.request_session_manager_add_topic().await?;
         // 向该主题的session注册为发布者
         info!("register add topic successful.");
-        let endpoint = self.register_publisher(&session_tx).await?;
-        // 接收客户端数据，将消息发布到session
-        info!("register publisher successful.");
         let peer_addr = self
             .local_context
             .stream
             .peer_addr()
             .map_err(|e| MQError::E("get peer addr failed.".to_string()))?
             .to_string();
+
+        let mut endpoint = self.register_publisher(&session_tx).await?;
+        // 接收客户端数据，将消息发布到session
         loop {
-            match self.recv_client_publish_message(&endpoint).await {
+            match self.recv_push_request(&mut endpoint).await {
                 Ok(_) => {}
                 Err(e) => {
                     if let MQError::IoError(x) = &e {
@@ -131,38 +133,84 @@ impl ConnectorHandler {
         )
         .await?;
         match res {
-            SessionResponse::Publisher(x) => Ok(x),
-            _ => Err(MQError::E(
-                "register publish to session failed.".to_string(),
-            )),
+            SessionResponse::Publisher(x) => {
+                info!("register publisher successful. uuid: {}", &x.uuid);
+                let res_body = ResponseResult::<i32>::new(0, "".to_string());
+                let response_proto = Protocol::new(
+                    ProtocolHeaderType::RegisterPublisherRes,
+                    ProtocolArgs::Null,
+                    serde_json::to_vec(&res_body).map_err(|e| {
+                        MQError::ConvertError(format!(
+                            "response result convert json failed. error:{}",
+                            e
+                        ))
+                    })?,
+                );
+                Protocol::send(&mut self.local_context.stream, response_proto).await?;
+                Ok(x)
+            }
+            _ => {
+                let res_body =
+                    ResponseResult::<i32>::new(1, "recv session response error.".to_string());
+                let response_proto = Protocol::new(
+                    ProtocolHeaderType::RegisterPublisherRes,
+                    ProtocolArgs::Null,
+                    serde_json::to_vec(&res_body).map_err(|e| {
+                        MQError::ConvertError(format!(
+                            "response result convert json failed. error:{}",
+                            e
+                        ))
+                    })?,
+                );
+                Protocol::send(&mut self.local_context.stream, response_proto).await?;
+                Err(MQError::E(
+                    "register publish to session failed.".to_string(),
+                ))
+            }
         }
     }
 
     // 接收客户端发布的消息
-    async fn recv_client_publish_message(&mut self, endpoint: &Endpoint) -> MQResult<()> {
+    async fn recv_push_request(&mut self, endpoint: &mut Endpoint) -> MQResult<()> {
         let protocol = Protocol::read(&mut self.local_context.stream).await?;
         let current_time = Utc::now();
         debug!("recv publish message protocol: {:?}", &protocol);
         use crate::protocol::ProtocolHeaderType::*;
+        debug!("the push message head type num: {}", PushMessage as u16);
         match protocol.header.p_type.clone() {
-            Null => todo!(),
-            Disconnect => todo!(),
-            RegisterPublisher => todo!(),
-            PublishMessage => {
+            PushMessage => {
                 let mut message = Message::try_from(protocol.body)?;
-                message.recv_time = current_time;
-                let publish_data = SessionRequest::PublishMessage(message);
-                debug!("ready publish value: {:?}", publish_data);
-                endpoint
-                    .session_tx
-                    .send(publish_data)
-                    .await
-                    .map_err(|e| MQError::E(format!("send failed. error: {}", e)))?;
+                // message.recv_time = current_time;
+                let push_message_param = PushMessageRequestParam {
+                    uuid: endpoint.uuid.to_string(),
+                    message,
+                };
+                let push_data = SessionRequest::PushMessage(push_message_param);
+                debug!("ready publish value: {:?}", push_data);
+                let res = ChannelUtil::request::<SessionRequest, SessionResponse>(
+                    &mut endpoint.session_tx,
+                    &mut endpoint.rx,
+                    push_data,
+                )
+                .await?;
+                match res {
+                    SessionResponse::Result(result) => {
+                        if !result.is_success() {
+                            MQError::E(result.error().to_string());
+                        }
+                        info!("push message successfully.");
+                    }
+                    _ => {
+                        error!("push data not suuport response type.")
+                    }
+                }
+                Ok(())
             }
-            RegisterSubscriber => todo!(),
-            SubscribeMessage => todo!(),
+            _ => Err(MQError::E(format!(
+                "only support push message protocol head type. current head type: {}",
+                protocol.header.p_type.clone() as u8
+            ))),
         }
-        Ok(())
     }
 
     // 请求session_manager, 请求add_topic
@@ -178,8 +226,7 @@ impl ConnectorHandler {
                 ))
             })?
             .to_string();
-        let body_obj =
-            serde_json::from_slice::<ProtocolBodyRegisterPublisher>(&self.protocol.body)?;
+        let body_obj = serde_json::from_slice::<ProtocolBodyRegisterQueue>(&self.protocol.body)?;
         let (mut tx1, mut rx1) = mpsc::channel::<SessionManagerResponse>(CHANNEL_BUFFER_LENGTH);
 
         let add_topic = AddTopic {
@@ -214,9 +261,6 @@ impl ConnectorHandler {
     async fn subscribe(&mut self) -> MQResult<()> {
         // 向session_manager 添加topic，确保主题存在
         let session_tx = self.request_session_manager_add_topic().await?;
-        // 向该主题的session注册为发布者
-        let mut endpoint = self.register_subscriber(&session_tx).await?;
-        // 接收客户端数据，将消息发布到session
         let peer_addr = self
             .local_context
             .stream
@@ -228,8 +272,14 @@ impl ConnectorHandler {
                 ))
             })?
             .to_string();
+        // 向该主题的session注册为发布者
+        let mut endpoint = self.register_subscriber(&session_tx).await?;
+
+        // Protocol::send(&mut self.local_context.stream, response_proto).await?;
+        // 接收客户端数据，将消息发布到session
+
         loop {
-            match self.recv_message_to_client(&mut endpoint).await {
+            match self.recv_pull_request(&mut endpoint).await {
                 Ok(_) => {}
                 Err(e) => {
                     if let MQError::IoError(w) = &e {
@@ -269,35 +319,133 @@ impl ConnectorHandler {
         )
         .await?;
         match res {
-            SessionResponse::Subscriber(x) => Ok(x),
-            _ => Err(MQError::E(
-                "register publish to session failed.".to_string(),
-            )),
+            SessionResponse::Subscriber(x) => {
+                info!("register subscribe successful. uuid: {}", &x.uuid);
+                let res_body = ResponseResult::<i32>::new(0, "".to_string());
+                let response_proto = Protocol::new(
+                    ProtocolHeaderType::RegisterSubscriberRes,
+                    ProtocolArgs::Null,
+                    serde_json::to_vec(&res_body).map_err(|e| {
+                        MQError::ConvertError(format!(
+                            "response result convert json failed. error:{}",
+                            e
+                        ))
+                    })?,
+                );
+                Protocol::send(&mut self.local_context.stream, response_proto).await?;
+                Ok(x)
+            }
+            _ => {
+                let res_body =
+                    ResponseResult::<i32>::new(1, "recv session response error.".to_string());
+                let response_proto = Protocol::new(
+                    ProtocolHeaderType::RegisterSubscriberRes,
+                    ProtocolArgs::Null,
+                    serde_json::to_vec(&res_body).map_err(|e| {
+                        MQError::ConvertError(format!(
+                            "response result convert json failed. error:{}",
+                            e
+                        ))
+                    })?,
+                );
+                Protocol::send(&mut self.local_context.stream, response_proto).await?;
+                Err(MQError::E(
+                    "register subscriber to session failed.".to_string(),
+                ))
+            }
         }
     }
 
     // 订阅，接收session发布的消息，并发送给客户端
-    async fn recv_message_to_client(&mut self, endpoint: &mut Endpoint) -> MQResult<()> {
-        match endpoint.rx.recv().await {
-            Some(mut res) => {
-                use SessionResponse::*;
-                match res {
-                    SessionResponse::BreakSession => todo!(),
-                    SessionResponse::ConsumeMessage(mut msg) => {
-                        let current_time = Utc::now();
-                        msg.recv_time = current_time;
-                        let value_len = msg.value.len();
+    // async fn recv_message_to_client(&mut self, endpoint: &mut Endpoint) -> MQResult<()> {
+    //     match endpoint.rx.recv().await {
+    //         Some(mut res) => {
+    //             use SessionResponse::*;
+    //             match res {
+    //                 SessionResponse::BreakSession => todo!(),
+    //                 SessionResponse::PullMessage(mut msg) => {
+    //                     let current_time = Utc::now();
+    //                     msg.recv_time = current_time;
+    //                     let value_len = msg.value.len();
+    //                     let proto = Protocol::new(
+    //                         ProtocolHeaderType::PullMessage,
+    //                         ProtocolArgs::Null,
+    //                         msg.into(),
+    //                     );
+    //                     Protocol::send(&mut self.local_context.stream, proto).await?;
+    //                 }
+    //                 _ => return Err(MQError::E(format!("not supported response."))),
+    //             }
+    //         }
+    //         None => return Err(MQError::E("not recv session manager response.".to_string())),
+    //     }
+    //     Ok(())
+    // }
+
+    // 接收客户端发布的消息
+    async fn recv_pull_request(&mut self, endpoint: &mut Endpoint) -> MQResult<()> {
+        let protocol = Protocol::read(&mut self.local_context.stream).await?;
+
+        debug!("recv publish message protocol: {:?}", &protocol);
+        use crate::protocol::ProtocolHeaderType::*;
+        match protocol.header.p_type.clone() {
+            PullMessage => {
+                let pull_request = serde_json::from_slice::<PullRequest>(&protocol.body)?;
+                let param = PullMessageRequestParam {
+                    // TODO: 拉取数量还需要确认实现罗技
+                    number: pull_request.number,
+                    uuid: endpoint.uuid.to_string(),
+                };
+                let pull_request_param = SessionRequest::PullMessage(param);
+                debug!("ready publish value: {:?}", pull_request_param);
+                let res = ChannelUtil::request::<SessionRequest, SessionResponse>(
+                    &mut endpoint.session_tx,
+                    &mut endpoint.rx,
+                    pull_request_param,
+                )
+                .await?;
+                self.recv_pull_response_to_client(res).await
+            }
+            _ => Err(MQError::E(format!(
+                "only support pull message protocol head type. current head type: {}",
+                protocol.header.p_type.clone() as u8
+            ))),
+        }
+    }
+
+    async fn recv_pull_response_to_client(&mut self, response: SessionResponse) -> MQResult<()> {
+        let current_time = Utc::now();
+        match response {
+            SessionResponse::PullMessage(result) => {
+                if !result.is_success() {
+                    return Err(MQError::E(result.error().to_string()));
+                }
+                match result.data {
+                    Some(mut data) => {
+                        // TODO: 此处可以优化，不传json数据，直接返回二进制，可以优化时间
+                        // let mut message_buffs: Vec<Vec<u8>> = vec![];
+                        for msg in data.iter_mut() {
+                            msg.fetch_timestamp = current_time.timestamp_nanos();
+                            // let buff = msg.into();
+                            // message_buffs.push(buff);
+                        }
                         let proto = Protocol::new(
-                            ProtocolHeaderType::SubscribeMessage,
+                            ProtocolHeaderType::PullMessageRes,
                             ProtocolArgs::Null,
-                            msg.into(),
+                            serde_json::to_vec(&data).map_err(|e| {
+                                MQError::ConvertError(
+                                    "convert message buffs to json failed.".to_string(),
+                                )
+                            })?,
                         );
-                        Protocol::send(&mut self.local_context.stream, proto).await?;
+                        Protocol::send(&mut self.local_context.stream, proto).await?
                     }
-                    _ => return Err(MQError::E(format!("not supported response."))),
+                    None => return Err(MQError::E(format!("the pull message is None."))),
                 }
             }
-            None => return Err(MQError::E("not recv session manager response.".to_string())),
+            _ => {
+                error!("push data not suuport response type.")
+            }
         }
         Ok(())
     }

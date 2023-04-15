@@ -1,4 +1,5 @@
 use crate::err::{MQError, MQResult};
+use crate::message::Message;
 use crate::utils::convert::{BuffUtil, VecUtil};
 use crate::utils::stream::StreamUtil;
 use std::convert::{From, Into, TryFrom, TryInto};
@@ -41,20 +42,27 @@ pub struct ProtocolHeader {
 }
 
 #[derive(Debug, Copy, Clone, Serialize, Deserialize)]
-// #[repr(C)]
+#[repr(C)]
 pub enum ProtocolHeaderType {
-    Null = 0, // u16
+    Null = 0x0, // u16
     // 注销连接
-    Disconnect = 1,
+    Disconnect = 0x1,
     // 注册为生产者
-    RegisterPublisher = 11,
+    RegisterPublisher = 0x11,
+    // 注册为生产者响应
+    RegisterPublisherRes = 0x91,
     // 发送数据
-    PublishMessage = 12,
+    PushMessage = 0x12,
 
     // 注册为消费者
-    RegisterSubscriber = 21,
+    RegisterSubscriber = 0x21,
+    // 注册为消费者响应
+    RegisterSubscriberRes = 0xa1,
+    // 注册为
     // 接收数据
-    SubscribeMessage = 22,
+    PullMessage = 0x22,
+
+    PullMessageRes = 0xa2,
 }
 
 pub const PROTOCOL_HEAD_VERSION: u8 = 0x01;
@@ -69,20 +77,40 @@ pub struct RegisterProcuer {
 pub enum ProtocolArgs {
     // 协议参数,json 格式，根据协议定
     Null,
-}
-
-impl ProtocolArgs {
-    pub fn to_buff(self) -> Vec<u8> {
-        match self {
-            ProtocolArgs::Null => Vec::new(),
-        }
-    }
+    // PullRequest,
 }
 
 // #[derive(Debug, Clone, Serialize, Default)]
 // pub struct ProtocolArgs {
 //     // 协议参数,json 格式，根据协议定
 //     pub args: String,
+// }
+
+#[derive(Debug, Copy, Clone, Serialize, Deserialize)]
+pub struct PullRequest {
+    // number表示准备拉取的消息数量
+    pub number: u32,
+}
+
+// pub struct PullResponse {
+//     // 多少个消息
+//     pub number: i32,
+//     // 每个消息的长度
+//     pub msg_lens: Vec<u64>,
+//     // 消息
+//     pub messages: Vec<Message>,
+// }
+
+// impl TryFrom<Vec<u8>> for PullResponse {
+//     type Error = MQError;
+//     fn try_from(v: Vec<u8>) -> Result<Self, Self::Error> {
+//         if v.len() < 4 {
+//             return Err(MQError::E("the buff length must more than 4.".to_string()));
+//         }
+//         let number_buff: [u8; 4] = v[0..4].try_into().unwrap();
+//         let number = i32::from_ne_bytes(number_buff);
+
+//     }
 // }
 
 #[derive(Debug, Clone, Serialize, Default)]
@@ -105,12 +133,18 @@ impl From<u16> for ProtocolHeaderType {
             Disconnect
         } else if value == RegisterPublisher as u16 {
             RegisterPublisher
-        } else if value == PublishMessage as u16 {
-            PublishMessage
+        } else if value == PushMessage as u16 {
+            PushMessage
         } else if value == RegisterSubscriber as u16 {
             RegisterSubscriber
-        } else if value == SubscribeMessage as u16 {
-            SubscribeMessage
+        } else if value == PullMessage as u16 {
+            PullMessage
+        } else if value == PullMessageRes as u16 {
+            PullMessageRes
+        } else if value == RegisterPublisherRes as u16 {
+            RegisterPublisherRes
+        } else if value == RegisterSubscriberRes as u16 {
+            RegisterSubscriberRes
         } else {
             Null
         }
@@ -212,6 +246,10 @@ impl ProtocolArgs {
     pub fn len(&self) -> usize {
         match self {
             ProtocolArgs::Null => 0,
+            // ProtocolArgs::PullRequest => Ok(self
+            //     .to_buff()
+            //     .map_err(|e| MQError::E(format!("the pull request not calcuate length.")))?
+            //     .len()),
         }
     }
     pub fn make(head_type: ProtocolHeaderType, buff: Vec<u8>) -> MQResult<ProtocolArgs> {
@@ -223,6 +261,17 @@ impl ProtocolArgs {
             }
         };
         Ok(arg)
+    }
+    fn to_buff(&self) -> Vec<u8> {
+        match self {
+            ProtocolArgs::Null => Vec::new(),
+            // ProtocolArgs::PullRequest => serde_json::to_vec(self).map_err(|e| {
+            //     MQError::ConvertError(format!(
+            //         "pull request arg convert json failed.\n\t error: {}",
+            //         e
+            //     ))
+            // }),
+        }
     }
 }
 
