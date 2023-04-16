@@ -440,15 +440,9 @@ impl ConnectorHandler {
 
         // 是否需要重新发送
         let mut b_pull = true;
-        // let ready = self
-        //     .local_context
-        //     .stream
-        //     .ready(Interest::READABLE | Interest::WRITABLE)
-        //     .await?;
-        // self.local_context.stream.try_read(buf)
-        //  && !ready.is_write_closed()
         // TODO: 当判断到客户端socket断开时，需要推出此循环
         while b_pull {
+            // 客户端连接断开则退出
             if self
                 .local_context
                 .stream
