@@ -116,6 +116,20 @@ pub struct PullMessageRequestParam {
 }
 
 #[derive(Debug)]
+pub enum SessionEndpointType {
+    // 订阅者
+    Subscriber,
+    // 发布者
+    Publisher,
+}
+
+#[derive(Debug)]
+pub struct DisconnectRequestParam {
+    pub uuid: String,
+    pub endpoint_type: SessionEndpointType,
+}
+
+#[derive(Debug)]
 pub enum SessionRequest {
     // 注册消费者
     RegisterSubscribe(RegisterSubscribeRequestParam),
@@ -130,8 +144,12 @@ pub enum SessionRequest {
     PullMessage(PullMessageRequestParam),
     // 生产数据
     PushMessage(PushMessageRequestParam),
-    // 中断
-    Break,
+
+    // 断开
+    Disconnect(DisconnectRequestParam),
+
+    // session manager -> session 退出消息
+    Exit,
 }
 
 // #[derive(Debug)]
@@ -330,6 +348,9 @@ impl Session {
                 // 生产数据, 向所有在线消费者发送消息
                 self.recv_push_msg(param).await;
             }
+            Disconnect(param) => {
+                self.disconnect(param).await;
+            }
             _ => {
                 error!("no support message.");
             }
@@ -345,6 +366,21 @@ impl Session {
                 Err(e) => {
                     error!("do manager request failed. {}", e.to_string())
                 }
+            }
+        }
+        Ok(())
+    }
+
+    // 发布者或者订阅者断开连接
+    pub async fn disconnect(&mut self, param: DisconnectRequestParam) -> MQResult<()> {
+        info!("disconnect endpoint: {:?}", param);
+        match param.endpoint_type {
+            SessionEndpointType::Subscriber => {
+                self.remove_subscriber(&param.uuid);
+                self.update_min_offset();
+            }
+            SessionEndpointType::Publisher => {
+                self.remove_publisher(&param.uuid);
             }
         }
         Ok(())
@@ -532,7 +568,7 @@ impl SessionManager {
         match self.session_queue_tx.get_mut(&topic) {
             Some(session_tx) => {
                 // 向所有连接发送主题下线通知，并删除所有主题
-                let r = session_tx.send(SessionRequest::Break).await.map_err(|e| {
+                let r = session_tx.send(SessionRequest::Exit).await.map_err(|e| {
                     MQError::E(format!("send remove topic result failed. e: {}", e))
                 })?;
                 Ok(())

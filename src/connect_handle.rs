@@ -2,6 +2,7 @@ use std::vec;
 
 use chrono::Utc;
 use tokio::{
+    io::{AsyncReadExt, Interest},
     sync::mpsc::{self, Sender},
     time::{sleep, Duration, Instant},
 };
@@ -11,10 +12,10 @@ use crate::{
     err::{ErrorCode, MQError, MQResult},
     protocol::{Protocol, ProtocolArgs, ProtocolHeader, ProtocolHeaderType},
     session::{
-        AddTopic, Endpoint, PullMessageRequestParam, PushMessageRequestParam,
-        RegisterPublisherRequestParam, RegisterSubscribeRequestParam, ResponseResult,
-        SessionManagerRequest, SessionManagerResponse, SessionRequest, SessionResponse,
-        CHANNEL_BUFFER_LENGTH,
+        AddTopic, DisconnectRequestParam, Endpoint, PullMessageRequestParam,
+        PushMessageRequestParam, RegisterPublisherRequestParam, RegisterSubscribeRequestParam,
+        ResponseResult, SessionEndpointType, SessionManagerRequest, SessionManagerResponse,
+        SessionRequest, SessionResponse, CHANNEL_BUFFER_LENGTH,
     },
     utils::{
         channel::{ChannelUtil, CHANNEL_BUFF_LEN},
@@ -94,6 +95,28 @@ impl ConnectorHandler {
         }
     }
 
+    // 断开连接，向session发送断开请求
+    async fn disconnect(
+        &mut self,
+        endpoint: &mut Endpoint,
+        endpoint_type: SessionEndpointType,
+    ) -> MQResult<()> {
+        // let param = SessionRequest::Disconnect;
+        info!("send disconnect request to session endpoint");
+        let param = DisconnectRequestParam {
+            uuid: endpoint.uuid.clone(),
+            endpoint_type,
+        };
+        let (mut tx2, mut rx2) = mpsc::channel::<SessionResponse>(CHANNEL_BUFF_LEN);
+        let res = ChannelUtil::request::<SessionRequest, SessionResponse>(
+            &endpoint.session_tx,
+            &mut rx2,
+            SessionRequest::Disconnect(param),
+        )
+        .await?;
+        Ok(())
+    }
+
     // 注册为发布者
     async fn publish(&mut self) -> MQResult<()> {
         // 向session_manager 添加topic，确保主题存在
@@ -115,6 +138,8 @@ impl ConnectorHandler {
                 Err(e) => {
                     if let MQError::IoError(x) = &e {
                         warn!("[{}] io closed. {}", peer_addr, x);
+                        self.disconnect(&mut endpoint, SessionEndpointType::Publisher)
+                            .await;
                         break;
                     };
                     error!("{}", e);
@@ -286,6 +311,8 @@ impl ConnectorHandler {
                 Err(e) => {
                     if let MQError::IoError(w) = &e {
                         warn!("[{}] io closed. {}", peer_addr, w);
+                        self.disconnect(&mut endpoint, SessionEndpointType::Subscriber)
+                            .await;
                         break;
                     };
                     error!("{}", e)
@@ -413,7 +440,26 @@ impl ConnectorHandler {
 
         // 是否需要重新发送
         let mut b_pull = true;
+        // let ready = self
+        //     .local_context
+        //     .stream
+        //     .ready(Interest::READABLE | Interest::WRITABLE)
+        //     .await?;
+        // self.local_context.stream.try_read(buf)
+        //  && !ready.is_write_closed()
+        // TODO: 当判断到客户端socket断开时，需要推出此循环
         while b_pull {
+            if self
+                .local_context
+                .stream
+                .ready(Interest::READABLE | Interest::WRITABLE)
+                .await?
+                .is_write_closed()
+            {
+                error!("the stream is closed.");
+                break;
+            }
+
             b_pull = false;
             let param = PullMessageRequestParam {
                 // TODO: 拉取数量还需要确认实现罗技
