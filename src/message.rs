@@ -141,3 +141,41 @@ impl Display for Message {
         )
     }
 }
+
+#[derive(Debug)]
+pub struct MessageIndex {
+    pub offset: u64,
+    pub length: u64,
+}
+
+impl MessageIndex {
+    pub fn new(offset: u64, length: u64) -> MessageIndex {
+        MessageIndex { offset: offset, length: length }
+    }
+}
+
+impl Into<Vec<u8>> for MessageIndex {
+    fn into(self) -> Vec<u8> {
+        let mut buff: Vec<u8> = vec![];
+        buff.extend_from_slice(&self.offset.to_ne_bytes());
+        buff.extend_from_slice(&self.length.to_ne_bytes());
+        buff
+    }
+}
+
+impl TryFrom<Vec<u8>> for MessageIndex {
+    type Error = MQError;
+
+    fn try_from(value: Vec<u8>) -> Result<Self, Self::Error> {
+        let err = "message infdex buff must more than 16 byte.".to_string();
+        if value.len() < 16 {
+            return Err(Self::Error::E(err));
+        }
+        let offset_buff: [u8; 8] = value[0..8].try_into().expect(err.as_str());
+        let length_buff: [u8; 8] = value[8..16].try_into().expect(err.as_str());
+        Ok(Self {
+            offset: u64::from_ne_bytes(offset_buff),
+            length: u64::from_ne_bytes(length_buff),
+        })
+    }
+}
