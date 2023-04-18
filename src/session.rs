@@ -1,6 +1,6 @@
 use crate::err::{MQError, MQResult};
 use crate::message::Message;
-use crate::storage::Store;
+use crate::storage::{FileStore, Store};
 use chrono::{DateTime, TimeZone, Utc};
 use std::cmp::min;
 use std::collections::HashMap;
@@ -51,9 +51,6 @@ pub enum SessionManagerRequest {
     AddTopic(AddTopic),
     // 移除topic
     RemoveTopic(RemoveTopic),
-    // 注册消费者
-    // Register
-    // 注册生产者
 }
 
 #[derive(Debug)]
@@ -67,7 +64,6 @@ pub struct AddTopicResponse {
 pub struct RemoveTopicResponse {
     pub code: i32,
     pub msg: String,
-    // pub tx: Sender<SessionRequest>,
 }
 
 // 相应的消息请求
@@ -148,27 +144,8 @@ pub enum SessionRequest {
     // 断开
     Disconnect(DisconnectRequestParam),
 
-    // session manager -> session 退出消息
     Exit,
 }
-
-// #[derive(Debug)]
-// pub struct ResponseMsg {
-//     pub code: i32,
-//     pub msg: String,
-// }
-
-// impl ResponseMsg {
-//     pub fn new(code: i32, msg: String) -> Self {
-//         ResponseMsg { code, msg }
-//     }
-//     pub fn is_success(&self) -> bool {
-//         self.code == 0i32
-//     }
-//     pub fn error(&self) -> &str {
-//         &self.msg
-//     }
-// }
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ResponseResult<T> {
@@ -210,12 +187,9 @@ pub enum SessionResponse {
 // 消费者、生产者 相应端，在session处进行接收处理
 #[derive(Debug)]
 pub struct SessionEndpoint {
-    // pub name: String,
     pub uuid: String,
     // session向消费者发送响应数据
     pub tx: Sender<SessionResponse>,
-    // 接收请求端发送的消息请求, 使用session中的rx
-    // pub request_rx: Receiver<TransferMessageRequest>,
     // 消费端获取数据的下标
     pub offset: usize,
 }
@@ -232,14 +206,6 @@ pub struct Endpoint {
     pub session_tx: Sender<SessionRequest>,
 }
 
-// pub struct Publisher {
-//     pub uuid: String,
-//     // clone给session，用以回发数据。
-//     pub tx: Sender<SessionResponse>,
-//     // 接收session回发数据。
-//     pub rx: Receiver<SessionResponse>,
-// }
-//
 // 每个会话
 #[derive(Debug)]
 struct Session {
@@ -297,7 +263,6 @@ impl Session {
         let (endpoint, session_endpoint) = self.create_endpoint()?;
         self.subscriber_map
             .insert(endpoint.uuid.to_string(), session_endpoint);
-        // self.subscribers.push(session_endpoint);
         Ok(endpoint)
     }
 
@@ -312,7 +277,6 @@ impl Session {
     // 移除一个消费者
     pub fn remove_subscriber(&mut self, uuid: &String) {
         self.subscriber_map.remove(uuid);
-        // self.subscribers.retain(|x| x.uuid != uuid);
     }
 
     // 移除一个生产者，
@@ -332,11 +296,9 @@ impl Session {
             }
             RemoveSubscribe(x) => {
                 self.remove_subscriber(&x.uuid);
-                // x.tx.send(SessionResponse::Result(ResponseMsg{code: 0, msg: e.to_string()})).await?;
             }
             RemovePublisher(x) => {
                 self.remove_publisher(&x.uuid);
-                // x.tx.send(SessionResponse::Result(ResponseMsg{code: 0, msg: e.to_string()})).await?;
             }
             PullMessage(param) => {
                 // 消费数据
@@ -402,8 +364,6 @@ impl Session {
                 e
             ))
         })?;
-        // 触发一次订阅数据的获取
-        // self.send_msg_to_subscribers().await;
         Ok(())
     }
 
@@ -448,7 +408,6 @@ impl Session {
                     })?;
             }
             None => {
-                // ResponseResult::new(1, format!("find subscribe failed for uuid: {}", param.uuid));
                 return Err(MQError::E(format!("no publisher for uuid: {}", param.uuid)));
             }
         }
@@ -511,7 +470,6 @@ impl Session {
                     })?;
             }
             None => {
-                // ResponseResult::new(1, format!("find subscribe failed for uuid: {}", param.uuid));
                 return Err(MQError::E(format!(
                     "no subscriber for uuid: {}",
                     param.uuid
@@ -626,7 +584,6 @@ impl SessionManager {
                                 }
                             }
                             // TODO：退出后，管理端需要移除该topic
-                            // self.remove_topic(topic)?;
                         });
                         res
                     }
@@ -650,13 +607,10 @@ impl SessionManager {
                             msg: "".to_string(),
                         }
                     }
-                    None => {
-                        RemoveTopicResponse {
-                            code: 1,
-                            msg: format!("the topic does not exist: {}", &x.topic),
-                            // tx: tx.clone(),
-                        }
-                    }
+                    None => RemoveTopicResponse {
+                        code: 1,
+                        msg: format!("the topic does not exist: {}", &x.topic),
+                    },
                 };
                 match x
                     .tx
@@ -666,7 +620,6 @@ impl SessionManager {
                     Ok(t) => {}
                     Err(e) => {
                         error!("send remove topic result failed. e: {}", e);
-                        // Err(MQError::E(format!("send remove topic result failed. e: {}", e)))
                     }
                 }
                 self.remove_topic(x.topic).await?;

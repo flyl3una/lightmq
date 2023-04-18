@@ -65,21 +65,6 @@ pub struct ProtocolBodyRegisterQueue {
     pub name: String,
 }
 
-// #[derive(Debug, Clone, Serialize, Deserialize)]
-// pub struct ProtocolBodyRegisterSubscribe {
-//     pub topic: String,
-//     pub name: String,
-// }
-
-// struct SessionClient {
-//     // 向session发送请求
-//     pub session_tx: SessionRequest,
-//     // session向客户端回发响应数据
-//     pub client_tx: SessionResponse,
-//     // session客户端接收session响应数据
-//     pub client_rx: SessionResponse,
-// }
-
 struct ConnectorHandler {
     server_context: ServerContext,
     local_context: LocalContext,
@@ -101,7 +86,6 @@ impl ConnectorHandler {
         endpoint: &mut Endpoint,
         endpoint_type: SessionEndpointType,
     ) -> MQResult<()> {
-        // let param = SessionRequest::Disconnect;
         info!("send disconnect request to session endpoint");
         let param = DisconnectRequestParam {
             uuid: endpoint.uuid.clone(),
@@ -207,7 +191,6 @@ impl ConnectorHandler {
         match protocol.header.p_type.clone() {
             PushMessage => {
                 let mut message = Message::try_from(protocol.body)?;
-                // message.recv_time = current_time;
                 let push_message_param = PushMessageRequestParam {
                     uuid: endpoint.uuid.to_string(),
                     message,
@@ -302,7 +285,6 @@ impl ConnectorHandler {
         // 向该主题的session注册为发布者
         let mut endpoint = self.register_subscriber(&session_tx).await?;
 
-        // Protocol::send(&mut self.local_context.stream, response_proto).await?;
         // 接收客户端数据，将消息发布到session
 
         loop {
@@ -384,32 +366,6 @@ impl ConnectorHandler {
             }
         }
     }
-
-    // 订阅，接收session发布的消息，并发送给客户端
-    // async fn recv_message_to_client(&mut self, endpoint: &mut Endpoint) -> MQResult<()> {
-    //     match endpoint.rx.recv().await {
-    //         Some(mut res) => {
-    //             use SessionResponse::*;
-    //             match res {
-    //                 SessionResponse::BreakSession => todo!(),
-    //                 SessionResponse::PullMessage(mut msg) => {
-    //                     let current_time = Utc::now();
-    //                     msg.recv_time = current_time;
-    //                     let value_len = msg.value.len();
-    //                     let proto = Protocol::new(
-    //                         ProtocolHeaderType::PullMessage,
-    //                         ProtocolArgs::Null,
-    //                         msg.into(),
-    //                     );
-    //                     Protocol::send(&mut self.local_context.stream, proto).await?;
-    //                 }
-    //                 _ => return Err(MQError::E(format!("not supported response."))),
-    //             }
-    //         }
-    //         None => return Err(MQError::E("not recv session manager response.".to_string())),
-    //     }
-    //     Ok(())
-    // }
 
     // 接收客户端发布的消息
     async fn recv_pull_request(&mut self, endpoint: &mut Endpoint) -> MQResult<()> {

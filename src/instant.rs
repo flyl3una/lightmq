@@ -83,26 +83,6 @@ impl ClientInstant {
         }
     }
 
-    // async fn publish<'a>(&mut self, topic: &'a str, value_type: ValueType, buff: Vec<u8>) {
-    //     self.register_publisher(topic).await;
-    //     let current = Utc::now();
-    //     match self.stream {
-    //         Some(ref mut stream) => {
-    //             let proto = Protocol::new(
-    //                 ProtocolHeaderType::PushMessage,
-    //                 ProtocolArgs::Null,
-    //                 message.into(),
-    //             );
-    //             // info!("publish protocol: {:?}", &publish_proto);
-    //             Protocol::send(stream, proto).await.unwrap();
-    //             debug!("send publish message protocol successful.");
-    //         }
-    //         None => {
-    //             panic!("need register publish.");
-    //         }
-    //     }
-    // }
-
     // 推送一个32位整数
     pub async fn push_int(&mut self, number: i32) -> MQResult<()> {
         self.push_value(ValueType::Int, number.to_ne_bytes().to_vec())

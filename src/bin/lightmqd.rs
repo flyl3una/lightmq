@@ -18,25 +18,17 @@ extern crate clap;
 use std::process::exit;
 use lightmq::{load_configure, LightMQCore, logger::init_console_log};
 use clap::{Arg, ArgMatches, Parser, Command, Subcommand};
-// use clap::{AppSettings};
-// #[macro_use]
 
 #[derive(Debug, Clone)]
-#[derive(Parser)] // requires `derive` feature
+#[derive(Parser)]
 #[clap(name = "lightmqd")]
-// #[clap(setting = AppSettings::ColoredHelp)]
 #[clap(about = "轻量级的MQ程序", long_about = None)]
 struct Cli {
-    // #[clap(subcommand)]
-    // command: Commands,
     #[arg(short='c', long="config", value_parser, required=true)]
     configure: String,
     // 日志级别， [trace, debug, info, warn, debug]
     #[arg(long="level", value_parser, required=false, default_value="warn")]
     log_level: String,
-
-    // #[clap(long="level", value_parser, required=false, default_value="warn")]
-    // version: Option<String>,
 }
 
 

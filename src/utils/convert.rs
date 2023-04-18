@@ -2,7 +2,6 @@ use std::error::Error;
 use std::{any::Any, convert::TryInto};
 
 use crate::err::{MQError, MQResult};
-// use std::str::pattern::Pattern;
 
 pub struct StringUtil {}
 

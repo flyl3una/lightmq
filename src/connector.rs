@@ -21,8 +21,6 @@ pub struct ServerContext {
 
 // #[derive(Clone)]
 pub struct LocalContext {
-    // tx: 将收到的消息发送到消息队列中
-    // pub tx: mpsc::Sender<MQMessage>,
     // 客户端链接，接收协议头，区分是注册，还是发送消息。
     pub stream: TcpStream,
 }
